@@ -1,44 +1,72 @@
-// Local terrain patch: heightfield around player, rebuilt on move (Phase 2 streams real tiles).
+// Local terrain patch: WorldTerrainSystem grid → mesh + water extras, rebuilt on move.
+// Detail near the player, geographically correct at distance (WorldStreamer owns far LOD).
 import * as THREE from "three";
-import type { TerrainSource } from "./WorldStreamer.js";
+import { WorldTerrainSystem } from "../world/geology.js";
+import { TerrainMaterialSystem } from "../world/terrainMaterial.js";
+import { RiverSystem, LakeSystem, OceanSystem, disposeExtras } from "../world/hydrology.js";
 import type { LLA } from "../../../shared/src/geo.js";
 
-const SIZE = 96, SEG = 96, EXTENT_M = 600; // 600 m patch
+export interface PatchOpts {
+  base: (lla: LLA) => number;   // continental elevation sampler (real raster / procedural)
+  rainMmH: number; tempC: number; biome: string; seed: number;
+}
 
 export class TerrainPatch {
   mesh: THREE.Mesh;
-  geo: THREE.PlaneGeometry;
-  constructor(private source: TerrainSource, mat?: THREE.Material) {
-    this.geo = new THREE.PlaneGeometry(EXTENT_M, EXTENT_M, SEG, SEG);
+  extras = new THREE.Group(); // foam, river ribbons, lake discs
+  sys = new WorldTerrainSystem();
+  private geo: THREE.PlaneGeometry;
+  private mats: TerrainMaterialSystem;
+  private flowMats: THREE.MeshStandardMaterial[] = [];
+
+  constructor() {
+    const SEG = this.sys.N - 1;
+    this.geo = new THREE.PlaneGeometry(this.sys.extent, this.sys.extent, SEG, SEG);
     this.geo.rotateX(-Math.PI / 2);
-    this.mesh = new THREE.Mesh(this.geo,
-      mat ?? new THREE.MeshStandardMaterial({ color: 0x3d5a34, roughness: 1 }));
+    this.mats = new TerrainMaterialSystem();
+    this.mesh = new THREE.Mesh(this.geo, this.mats.material);
     this.mesh.receiveShadow = true;
   }
-  rebuild(player: LLA, toLocal: (lla: LLA) => { x: number; z: number }, groundAt: (lla: LLA) => number) {
+
+  rebuild(center: LLA, opts: PatchOpts & { ref: LLA }): void {
+    this.sys.rebuild(center, opts.base, opts.rainMmH, opts.seed, opts.ref);
+    // Vertices in spawn-anchored world meters: the mesh sits at origin forever,
+    // and the walking player (same frame) can never leave the ground behind.
     const pos = this.geo.attributes.position;
-    const mPerDegLat = 111320, mPerDegLon = 111320 * Math.cos((player.lat * Math.PI) / 180);
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i), z = pos.getZ(i);
-      const lla: LLA = { lat: player.lat + (-z) / mPerDegLat, lon: player.lon + x / mPerDegLon, alt: 0 };
-      pos.setY(i, groundAt(lla) - groundAt(player));
+    const N = this.sys.N;
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+      const v = j * N + i;
+      const ax = this.sys.cx + (i / (N - 1) - 0.5) * this.sys.extent;
+      const az = this.sys.cz + (j / (N - 1) - 0.5) * this.sys.extent;
+      pos.setX(v, ax); pos.setZ(v, az);
+      pos.setY(v, this.sys.rel(ax, az));
     }
     pos.needsUpdate = true;
     this.geo.computeVertexNormals();
-    void toLocal;
-  }
-}
+    this.geo.computeBoundingSphere();
+    this.mats.paint(this.sys, this.geo, { biome: opts.biome, tempC: opts.tempC, seed: opts.seed });
+    this.mats.setWetness(opts.rainMmH > 0.5 ? 1 : 0);
 
-export function groundColorFor(biome: string): number {
-  switch (biome) {
-    case "jungle": return 0x1f4a24;
-    case "forest": return 0x2f5230;
-    case "grassland": return 0x5a7038;
-    case "desert": return 0xb59a5e;
-    case "tundra": return 0x8a9387;
-    case "ice-sheet": return 0xdfe8ec;
-    case "boreal": return 0x2c4636;
-    case "wetland": return 0x33543a;
-    default: return 0x3d5a34;
+    // Water extras follow carved hydrology.
+    disposeExtras(this.extras);
+    this.flowMats = [];
+    this.extras.add(OceanSystem.buildFoam(this.sys));
+    for (const r of this.sys.rivers) {
+      const g = RiverSystem.buildRibbon(r, this.sys);
+      if (g.userData.mat) this.flowMats.push(g.userData.mat as THREE.MeshStandardMaterial);
+      this.extras.add(g);
+    }
+    for (const l of this.sys.lakes) this.extras.add(LakeSystem.buildDisc(l, this.sys));
+  }
+
+  setWetness(w: number): void { this.mats.setWetness(w); }
+  waterYRel(): number { return this.sys.waterYRel(); }
+
+  tick(dt: number, t: number): void {
+    for (const m of this.flowMats) {
+      const tex = m.map as THREE.Texture | null;
+      if (tex) tex.offset.y = (t * 0.25) % 1; // downstream flow
+    }
+    void dt;
   }
 }

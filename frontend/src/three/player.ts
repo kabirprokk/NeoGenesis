@@ -10,6 +10,8 @@ export class PlayerController {
   vel = new THREE.Vector3();
   grounded = true;
   eyeHeight = 1.7;
+  gravity = 12.5;   // set 9.80665 for real Earth (engine-owned games do this)
+  maxFall = 54;     // human terminal velocity, m/s
   keys: MoveState = { f: false, b: false, l: false, r: false, run: false, crouch: false, jump: false };
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
@@ -48,8 +50,12 @@ export class PlayerController {
     if (code === "KeyC") this.keys.crouch = on;
     if (code === "Space") this.keys.jump = on;
   }
-  update(dt: number, groundY: number, inWater: boolean) {
-    const speed = this.keys.crouch ? 1.6 : this.keys.run ? 7.5 : 4.2;
+  update(dt: number, groundY: number, inWater: boolean,
+    opts?: { colliders?: { x: number; z: number; r: number }[]; grade?: number }) {
+    let speed = this.keys.crouch ? 1.6 : this.keys.run ? 7.5 : 4.2;
+    // Uphill costs effort, downhill is free — movement has physical weight.
+    const grade = opts?.grade ?? 0;
+    speed *= THREE.MathUtils.clamp(1 / (1 + Math.max(0, grade) * 2.5), 0.35, 1.12);
     const dir = new THREE.Vector3(
       (this.keys.r ? 1 : 0) - (this.keys.l ? 1 : 0), 0,
       (this.keys.b ? 1 : 0) - (this.keys.f ? 1 : 0));
@@ -59,12 +65,37 @@ export class PlayerController {
     this.vel.z += (dir.z * speed - this.vel.z) * Math.min(1, accel * dt / Math.max(1, speed));
     if (inWater) { this.vel.x *= 0.55; this.vel.z *= 0.55; }
     if (this.keys.jump && this.grounded) { this.vel.y = 4.6; this.grounded = false; }
-    this.vel.y -= 12.5 * dt;
+    this.vel.y -= this.gravity * dt;
+    if (this.vel.y < -this.maxFall) this.vel.y = -this.maxFall;
     this.obj.position.addScaledVector(this.vel, dt);
+    // Solid world: trees, boulders, and animals push back (two relaxation passes).
+    const cols = opts?.colliders;
+    if (cols) {
+      const pr = 0.45;
+      for (let pass = 0; pass < 2; pass++) {
+        for (const c of cols) {
+          const dx = this.obj.position.x - c.x, dz = this.obj.position.z - c.z;
+          const min = c.r + pr;
+          const d2 = dx * dx + dz * dz;
+          if (d2 < min * min && d2 > 1e-8) {
+            const d = Math.sqrt(d2), push = (min - d) / d;
+            this.obj.position.x += dx * push;
+            this.obj.position.z += dz * push;
+          } else if (d2 <= 1e-8) {
+            this.obj.position.x += min; // dead-center: eject along +x
+          }
+        }
+      }
+    }
     const eyeTarget = this.keys.crouch ? 1.05 : this.eyeHeight;
     this.camera.position.y += (eyeTarget - this.camera.position.y) * Math.min(1, 10 * dt);
     if (this.obj.position.y <= groundY) {
       this.obj.position.y = groundY; this.vel.y = 0; this.grounded = true;
+    }
+    // Camera never clips underground on steep ground.
+    const minEye = groundY + 0.4;
+    if (this.obj.position.y + this.camera.position.y < minEye) {
+      this.obj.position.y = minEye - this.camera.position.y;
     }
     // Subtle head-bob (weight, not shake)
     const hSpeed = Math.hypot(this.vel.x, this.vel.z);

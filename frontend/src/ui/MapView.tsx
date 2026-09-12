@@ -9,7 +9,9 @@ export function MapView({ open, onClose, lat, lon, discoveries }:
   return (
     <div className="panel">
       <h2>Planetary Map</h2>
-      <div style={{ position: "relative", width: "100%", aspectRatio: "2/1", background: "linear-gradient(#0b2233,#123)", borderRadius: 8 }}>
+      <div style={{ position: "relative", width: "100%", aspectRatio: "2/1", borderRadius: 8, overflow: "hidden" }}>
+        <img src="/earth/earth-day.jpg" alt="real Earth surface (NASA Blue Marble)"
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "fill" }} />
         {discoveries.map((d, i) => (
           <div key={i} title={d.name} style={{ position: "absolute", left: `${X(d.lon)}%`, top: `${Y(d.lat)}%`, width: 6, height: 6, background: "#c9b458", borderRadius: "50%" }} />
         ))}

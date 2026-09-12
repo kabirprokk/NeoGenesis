@@ -14,9 +14,9 @@ export function climateFor(cfg: WorldEraConfig, inp: ClimateInput): ClimateOutpu
   tempC += Math.max(0, 1 - inp.coastDistKm / 400) * 2 * Math.sign(30 - tempC || 1) * 0.5;
   if (cfg.iceSheets && Math.abs(inp.lat) > 55) tempC -= 18;
   // Precipitation: ITCZ + midlatitude storm tracks + orographic + aridity belts
-  let precip = 2200 * Math.exp(-((Math.abs(inp.lat) - 5) / 18) ** 2)
-    + 1200 * Math.exp(-((Math.abs(inp.lat) - 55) / 20) ** 2)
-    + 400 * Math.exp(-((Math.abs(inp.lat) - 25) / 9) ** 2) * 0.25;
+  let precip = 2200 * Math.exp(-(((Math.abs(inp.lat) - 5) / 18) ** 2))
+    + 1200 * Math.exp(-(((Math.abs(inp.lat) - 55) / 20) ** 2))
+    + 400 * Math.exp(-(((Math.abs(inp.lat) - 25) / 9) ** 2)) * 0.25;
   precip *= Math.exp(-Math.max(0, inp.altM) / 9000) + (inp.slope ? Math.min(0.6, inp.slope * 2) : 0);
   precip *= 1 + 0.25 * greenhouse;
   if (cfg.iceSheets && Math.abs(inp.lat) > 60) precip *= 0.6;

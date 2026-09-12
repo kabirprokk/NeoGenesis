@@ -3,8 +3,8 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import websocket from "@fastify/websocket";
 import pg from "pg";
-import Redis from "ioredis";
-import { tickCohorts } from "../../../shared/src/ecology.js";
+import { Redis } from "ioredis";
+import { tickCohorts } from "../../shared/src/ecology.js";
 
 const PORT = Number(process.env.PORT ?? 3001);
 const DATABASE_URL = process.env.DATABASE_URL ?? "postgres://neo:genesis@localhost:5432/neogenesis";
@@ -14,8 +14,11 @@ const db = new pg.Pool({ connectionString: DATABASE_URL });
 db.on("error", (e) => console.warn("[db] pool error (running offline?):", e.message));
 let redis: Redis | null = null;
 try {
-  redis = new Redis(REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1 });
-  redis.connect().catch(() => { redis = null; });
+  const r = new Redis(REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 1, enableReadyCheck: false, retryStrategy: () => null });
+  r.on("error", () => { redis = null; }); // offline cache is optional — stay quiet
+  try { await r.connect(); redis = r.status === "ready" ? r : null; }
+  catch { redis = null; }
+  if (!redis) { try { r.disconnect(); } catch { /* offline ok */ } }
 } catch { redis = null; }
 
 // In-memory fallback when Postgres is unreachable (frontend still works).
@@ -105,7 +108,7 @@ app.post("/api/discoveries", async (req) => {
 
 // --- Species catalog (static defs; sightings recorded, never NPCs) ---
 app.get("/api/species", async () => {
-  const { SPECIES, FOOD_WEB } = await import("../../../shared/src/ecology.js");
+  const { SPECIES, FOOD_WEB } = await import("../../shared/src/ecology.js");
   return { foodWeb: FOOD_WEB, species: SPECIES };
 });
 
@@ -119,7 +122,7 @@ app.post("/api/eco/tick", async (req) => {
 // --- WebSocket: per-player room (future multiplayer would add presence here; forbidden now) ---
 app.get("/ws", { websocket: true }, (socket) => {
   socket.send(JSON.stringify({ type: "welcome", oneHuman: true }));
-  socket.on("message", (raw) => {
+  socket.on("message", (raw: unknown) => {
     try {
       const msg = JSON.parse(String(raw));
       if (msg.type === "eco-delta" && redis) void redis.publish(`player:${msg.playerId}`, String(raw));

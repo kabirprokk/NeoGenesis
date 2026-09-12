@@ -81,8 +81,11 @@ Switching presets must never introduce human NPCs/civilization.
 - Fire spread uses cellular/grid moisture/fuel/wind model — plausible, not a combustion solve.
 
 ## 6. Geographic assumptions
-- Real WGS84 planet (a=6378137 m, f=1/298.257223563), real coastlines/rivers/lakes where
-  datasets available; otherwise procedural detail octaves.
+- Real WGS84 planet (a=6378137 m, f=1/298.257223563). Coastlines come from a real
+  ocean mask raster and terrain height from a real relief raster (vendored NASA Blue
+  Marble-family imagery, pixel-calibrated — see `docs/ASSETS.md`). Relief is
+  range-scaled (Everest ≈ 5200 m in-game), not a survey DEM: the coastline layer is
+  the accurate one.
 - **Deliberate anachronism:** modern continental positions used under a Cretaceous-inspired
   biosphere. Documented in-game in the Field Journal ("cartographic simplification").
 - Sea level fixed per preset (default 0 m modern datum; ice-age preset applies eustatic curve).

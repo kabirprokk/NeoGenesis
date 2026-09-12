@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port 5173",
+    "fetch-assets": "node scripts/fetch-assets.mjs",
     "build": "tsc -p tsconfig.json && vite build",
     "preview": "vite preview"
   },

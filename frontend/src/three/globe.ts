@@ -10,10 +10,20 @@ export interface SkyState {
 
 export function buildGlobe(scene: THREE.Scene) {
   const R = 6371; // scene units scaled (1 unit = 1 km, camera near-field trick)
+  const texLoader = new THREE.TextureLoader();
+  const dayTex = texLoader.load("/earth/earth-day.jpg", (t) => { t.colorSpace = THREE.SRGBColorSpace; });
+  const bumpTex = texLoader.load("/earth/earth-topology.png");
+  // Missing files (offline first run) → flat color fallback; game still boots.
+  dayTex.premultiplyAlpha = false;
   const earth = new THREE.Mesh(
     new THREE.SphereGeometry(R, 96, 64),
-    new THREE.MeshStandardMaterial({ color: 0x2d4a2f, roughness: 1, metalness: 0 })
+    new THREE.MeshStandardMaterial({ map: dayTex, bumpMap: bumpTex, bumpScale: 18, color: 0xffffff, roughness: 0.95, metalness: 0 })
   );
+  // Surface mode: the player stands ON the planet, so a miniature globe at the
+  // scene origin would surround them with wrong geometry. Hidden — the far-field
+  // terrain + atmosphere shell carry the planetary illusion. (The texture still
+  // serves the 2D planetary map.) Re-enable only for an orbital/space view.
+  earth.visible = false;
   earth.rotation.z = 0;
   scene.add(earth);
 
@@ -35,6 +45,14 @@ export function buildGlobe(scene: THREE.Scene) {
   scene.add(atmos);
 
   const sun = new THREE.DirectionalLight(0xffffff, 3);
+  // Real-time shadows in a ±80 m box around the player (repositioned every frame).
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -80; sun.shadow.camera.right = 80;
+  sun.shadow.camera.top = 80; sun.shadow.camera.bottom = -80;
+  sun.shadow.camera.near = 1; sun.shadow.camera.far = 1200;
+  sun.shadow.bias = -0.0004;
+  sun.shadow.normalBias = 1.5;
   scene.add(sun); scene.add(sun.target);
   const moon = new THREE.DirectionalLight(0x8fa3c7, 0.0);
   scene.add(moon); scene.add(moon.target);

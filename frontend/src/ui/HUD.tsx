@@ -1,13 +1,13 @@
 import React from "react";
 import type { Vitals } from "../sim/survival.js";
 
-export function HUD({ lat, lon, alt, tempC, timeStr, weather, vitals, faded, era }:
-  { lat: number; lon: number; alt: number; tempC: number; timeStr: string; weather: string; vitals: Vitals; faded: boolean; era: string }) {
+export function HUD({ pos, alt, tempC, timeStr, weather, vitals, faded, era }:
+  { pos: string; alt: number; tempC: number; timeStr: string; weather: string; vitals: Vitals; faded: boolean; era: string }) {
   return (
     <div className="hud">
       <div className={`hud-top${faded ? " faded" : ""}`}>
-        <span>◈ {lat.toFixed(4)}°, {lon.toFixed(4)}°</span>
-        <span>▲ {Math.round(alt)} m</span>
+        <span>◈ {pos}</span>
+        <span>▲ {alt.toFixed(1)} m</span>
         <span>◐ {tempC.toFixed(1)}°C</span>
         <span>☀ {timeStr}</span>
         <span>{weather}</span>
@@ -19,7 +19,7 @@ export function HUD({ lat, lon, alt, tempC, timeStr, weather, vitals, faded, era
           <div style={{ opacity: 0.6 }}>{era}</div>
         </div>
       </div>
-      <div className="hud-help">WASD move · Shift run · C crouch · Space jump<br />J journal · M map · H HUD · F campfire · click to look</div>
+      <div className="hud-help">WASD move · Shift run · C crouch · Space jump<br />J journal · X lab · ~ terminal · H HUD · click to look</div>
     </div>
   );
 }

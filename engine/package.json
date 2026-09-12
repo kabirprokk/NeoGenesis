@@ -1,0 +1,13 @@
+{
+  "name": "@neogenesis/engine",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "test": "tsx test/run-tests.mts",
+    "experience": "tsx src/cli.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.1",
+    "typescript": "^5.5.4"
+  }
+}
