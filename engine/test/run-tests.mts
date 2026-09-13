@@ -2,7 +2,7 @@
 import { PHYSICS } from "../src/constants.js";
 import { MATERIALS, FLUIDS, EXPLOSIVES, explosiveClass, FRICTION_PAIRS, REPOSE_DEG } from "../src/materials.js";
 import { PLANETS } from "../src/planets.js";
-import { humanTerminal, projectileRange, mohsVerdict, buoyancyVerdict, soundDelay, slidesOnIncline, reposeOk, heatEnergyJ, meltEnergyKJ, heatTimeS, lorentz, relKineticJ, orbitVelocity, escapeVelocity, orbitPeriodS, horizonM, soundSpeed, gravityAt, blackbodyFlux } from "../src/physics.js";
+import { humanTerminal, projectileRange, mohsVerdict, buoyancyVerdict, soundDelay, slidesOnIncline, reposeOk, heatEnergyJ, meltEnergyKJ, heatTimeS, lorentz, relKineticJ, orbitVelocity, escapeVelocity, orbitPeriodS, horizonM, soundSpeed, gravityAt, blackbodyFlux, machCdFactor, magnusCl, biotNumber } from "../src/physics.js";
 import { EngineWorld } from "../src/world.js";
 import { getModel, MODEL_COUNT, spawnModel } from "../src/models.js";
 import { experience, runScenario } from "../src/experience.js";
@@ -469,3 +469,103 @@ console.log(`\nALL ${pass} CHECKS PASSED (incl. crowds)`);
   ok(!w.log.some((l) => l.includes("collided")), "nested cargo never ejects");
 }
 console.log(`\nALL ${pass} CHECKS PASSED (incl. cargo)`);
+// Reasoning across setups: follow-ups, comparatives, conditionals, races,
+// walls, fill/slosh, wind, spin, CCD, Biot. (Neo frontier + engine honesty.)
+{
+  const mem = new NeoMemory();
+  const p0 = neoParse("drop a glass box from 50m", mem);
+  mem.learn("drop a glass box from 50m", p0);
+  const p1 = neoParse("again, but on Mars", mem);
+  ok(p1.action === "drop" && p1.material === "glass" && p1.planet === "mars" && (p1.heightM ?? 0) >= 50, "again-but-Mars inherits setup", `${p1.action}/${p1.material}/${p1.planet}/${p1.heightM}`);
+  ok(!!p1.followupNote && p1.followupNote.includes("Mars") === false && /mars/i.test(p1.followupNote), "follow-up narrated", p1.followupNote ?? "");
+  mem.learn("again, but on Mars", p1);
+  const p2 = neoParse("make it heavier", mem);
+  ok(p2.material === "glass" && p2.sizeM > p1.sizeM, "make-it-heavier scales inherited size", `${p2.sizeM} > ${p1.sizeM}`);
+  const p3 = neoParse("no, I meant a steel cube", mem);
+  ok(p3.material === "steel" && p3.action === "drop" && (p3.heightM ?? 0) >= 50, "correction revises, not restarts", `${p3.material}/${p3.action}/${p3.heightM}`);
+  const p4 = neoParse("throw a copper sphere twice as big");
+  ok(Math.abs(p4.sizeM - 1) < 1e-9, "twice as big doubles size", p4.sizeM);
+  const p5 = neoParse("drop a steel box from 100m at half the height");
+  void p5;
+  const mem2 = new NeoMemory();
+  const q0 = neoParse("drop a steel box from 100m", mem2);
+  mem2.learn("drop a steel box from 100m", q0);
+  const q1 = neoParse("half the height", mem2);
+  ok(Math.abs((q1.heightM ?? 0) - 50) < 1e-9 && q1.material === "steel", "half-the-height halves inherited", `${q1.heightM}/${q1.material}`);
+}
+console.log(`\nALL ${pass} CHECKS PASSED (incl. followup)`);
+{
+  const c = neoParse("if the glass breaks, drop steel");
+  ok(!!c.condIf && !!c.condThen, "conditional splits branch", `${c.condIf?.material}/${c.condThen?.material}`);
+  const s = neoScenario(c);
+  ok(s.branch?.ifBody === 0 && s.branch?.thenBody === 1, "branch marker travels");
+  const r = runScenario("if the glass breaks, drop steel", s);
+  ok(typeof r.measurements.conditionMet === "boolean" && r.reasons.join().includes("IF "), "branch verdict narrated", r.reasons[0]?.slice(0, 80));
+  const e = experience("if the glass breaks, drop steel");
+  ok(typeof e.measurements.conditionMet === "boolean", "string-path conditional", JSON.stringify(e.measurements.conditionMet));
+  const race = experience("drop steel and glass from 50m, tell me who lands first");
+  const order = (race.measurements.landingOrder ?? []) as { body: string }[];
+  ok(order.length === 2 && order[0].body.includes("Steel") && race.reasons.join().includes("Touchdown order"), "steel wins the race", JSON.stringify(order.map((o) => o.body)));
+  const wall = neoParse("throw a steel ball at 30 m/s over the wall into the pool");
+  ok(!!wall.obstacle && wall.target.kind === "fluid", "wall + pool parsed", `${wall.obstacle?.word}/${wall.target.word}`);
+  const wr = runScenario("wall throw", neoScenario(wall));
+  ok((wr.measurements.wallClearM as number) > 0, "fast throw clears the wall", JSON.stringify(wr.measurements.wallClearM));
+}
+console.log(`\nALL ${pass} CHECKS PASSED (incl. branch-race-wall)`);
+{
+  const half = neoParse("throw a half-full bucket of water");
+  ok(half.fillFrac === 0.5 && half.containedFluid === "water", "half-full parsed", `${half.fillFrac}/${half.containedFluid}`);
+  const full = neoParse("throw a bucket of water");
+  const sh = neoScenario(half), sf = neoScenario(full);
+  const mh = (sh.bodies ?? [])[1]?.massKg ?? 0, mf = (sf.bodies ?? [])[1]?.massKg ?? 0;
+  ok(mh > 0 && Math.abs(mh / mf - 0.5) < 0.01, "cargo mass scales with fill", `${mh}/${mf}`);
+  const w = new EngineWorld();
+  const shell = w.spawn({ shape: "box", material: "glass", sizeM: 0.5, pos: { x: 0, y: 5, z: 0 } });
+  const coreH = w.spawn({ shape: "box", material: "water", sizeM: 0.5, pos: { x: 0.3, y: 5, z: 0 }, ghost: true, massOverrideKg: 500, cargoOfId: shell.id, fillFrac: 0.5 });
+  void coreH;
+  const tH = w.tethers[0];
+  const w2 = new EngineWorld();
+  const shell2 = w2.spawn({ shape: "box", material: "glass", sizeM: 0.5, pos: { x: 0, y: 5, z: 0 } });
+  w2.spawn({ shape: "box", material: "water", sizeM: 0.5, pos: { x: 0.3, y: 5, z: 0 }, ghost: true, massOverrideKg: 1000, cargoOfId: shell2.id, fillFrac: 1 });
+  const tF = w2.tethers[0];
+  ok(w.tethers.length === 1 && tH.k < tF.k, "half-full sloshes looser than full", `${tH.k.toFixed(1)} < ${tF.k.toFixed(1)}`);
+  w.run(2);
+  ok(!w.log.some((l) => l.includes("collided")), "tethered cargo never ejects");
+}
+console.log(`\nALL ${pass} CHECKS PASSED (incl. slosh)`);
+{
+  ok(Math.abs(machCdFactor(30, 15) - 1) < 1e-9, "subsonic Cd untouched", machCdFactor(30, 15));
+  ok(machCdFactor(343, 15) > 1.5, "transonic bump", machCdFactor(343, 15).toFixed(2));
+  ok(Math.abs(magnusCl(100, 0.5, 20) - 0.3) < 1e-9, "Magnus Cl curve", magnusCl(100, 0.5, 20));
+  ok(Math.abs(biotNumber(150, 0.015, 1.0) - 2.25) < 1e-9, "Biot number", biotNumber(150, 0.015, 1.0));
+  const lead = experience("does lead melt at 500C");
+  ok(lead.reasons.join().includes("No conductivity data"), "missing-k flagged, not faked");
+  const rangeOf = (windX: number): number => {
+    const w = new EngineWorld();
+    w.env.wind = { x: windX, y: 0, z: 0 };
+    const b = w.spawn({ shape: "sphere", material: "styrofoam", sizeM: 0.5, pos: { x: 0, y: 10, z: 0 },
+      vel: { x: 18 * Math.cos(Math.PI / 5), y: 18 * Math.sin(Math.PI / 5), z: 0 }, dragProfile: "sphere" });
+    w.run(10);
+    return b.pos.x;
+  };
+  ok(rangeOf(10) > rangeOf(0) + 2, "tailwind carries throws", `${rangeOf(10).toFixed(1)} > ${rangeOf(0).toFixed(1)}`);
+  const spinRange = (spinZ: number): number => {
+    const w = new EngineWorld();
+    const b = w.spawn({ shape: "sphere", material: "styrofoam", sizeM: 0.5, pos: { x: 0, y: 10, z: 0 },
+      vel: { x: 20, y: 6, z: 0 }, dragProfile: "sphere", spin: { x: 0, y: 0, z: spinZ } });
+    w.run(8);
+    return Math.hypot(b.pos.x, b.pos.z);
+  };
+  ok(spinRange(100) > spinRange(0) + 0.5, "backspin lifts light balls", `${spinRange(100).toFixed(1)} > ${spinRange(0).toFixed(1)}`);
+  const bk = neoParse("throw a steel ball with backspin");
+  ok(!!bk.spin && bk.spin[2] === 100, "backspin parsed", JSON.stringify(bk.spin));
+  // CCD: 3 km/s glass must shatter ON the wall, not tunnel past it.
+  const w3 = new EngineWorld();
+  w3.spawn({ shape: "box", material: "steel", sizeM: 1.5, static: true, pos: { x: 30, y: 1.5, z: 0 } });
+  const g = w3.spawn({ shape: "sphere", material: "glass", sizeM: 0.3, pos: { x: 0, y: 1.5, z: 0 }, vel: { x: 3000, y: 0, z: 0 }, dragProfile: "sphere" });
+  w3.run(0.05);
+  ok(g.broken && g.pos.x < 35, "hypersonic impact fractures on the wall", `${g.broken}/${g.pos.x.toFixed(1)}`);
+  const se = runTool("sim-env", { wind: 10 }, {});
+  ok(se.ok && (se.result as { env: { wind: { x: number } } }).env.wind.x === 10, "wind tool stages air");
+}
+console.log(`\nALL ${pass} CHECKS PASSED (incl. wind-spin-ccd)`);

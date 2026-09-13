@@ -4,7 +4,7 @@
 import { PHYSICS } from "./constants.js";
 import { MATERIALS, FLUIDS, DRAG_CD, type MaterialDef } from "./materials.js";
 import { SPECIFIC_HEAT, EMISSIVITY, H_CONV } from "./science.js";
-import { terminalVelocity } from "./physics.js";
+import { machCdFactor, magnusCl } from "./physics.js";
 
 export interface Vec3 { x: number; y: number; z: number }
 export type Shape = "sphere" | "box";
@@ -24,15 +24,24 @@ export interface Body {
   hasMoved: boolean; settled: boolean; // rest-event bookkeeping (one "came to rest" per body)
   hitT: number; // last body-on-body impact time (narration cooldown)
   ghost: boolean; // nested cargo (fluid cores): skips body-vs-body contact, still hits ground
+  spin: Vec3; // angular velocity rad/s — Magnus lift only (no tumbling orientation yet)
+  sloshM: number; // cargo offset from its shell anchor (0 for shells) — weight-shift readout
+  landedT: number | null; // first touchdown time (ground or fluid surface) for landing-order races
   dragProfile: string; dragCd: number; areaM2: number;
   events: string[];
 }
 export interface EnvPreset {
   gravity: number; airDensity: number; ambientC: number; groundMuS: number; groundMuK: number; name: string;
+  wind: Vec3; // bulk air motion m/s — drag + terminal velocity use air-relative velocity
 }
+/** Ground bounce partner: poured-concrete-ish slab, gameplay-tuned (pair property). */
+export const GROUND_E = 0.15;
+/** Slosh tether: ghost fluid core ↔ shell. Approx pendulum model, NOT CFD —
+ * stiffness/damping widen with empty headspace (half-full sloshes hardest). */
+export interface SloshTether { cargo: string; shell: string; k: number; damp: number; fill: number }
 export const EARTH_SURFACE: EnvPreset = {
   name: "Earth surface", gravity: PHYSICS.G_EARTH, airDensity: PHYSICS.AIR_DENSITY,
-  ambientC: 15, groundMuS: 0.8, groundMuK: 0.6,
+  ambientC: 15, groundMuS: 0.8, groundMuK: 0.6, wind: { x: 0, y: 0, z: 0 },
 };
 
 let nextId = 1;
@@ -45,11 +54,22 @@ export class EngineWorld {
 
   addFluid(f: FluidBox): number { this.fluids.push(f); return this.fluids.length - 1; }
   clearFluids(): void { this.fluids = []; }
+  tethers: SloshTether[] = [];
+
+  /** Tie a ghost cargo core to its shell (spring-damper in both directions). */
+  tether(cargoId: string, shellId: string, fill: number): SloshTether {
+    const headroom = 1 - Math.min(1, Math.max(0, fill));
+    // Full = stiff plug (k=80), half = loose slosh (k≈18), near-empty = light rattle.
+    const k = 80 - 62 * Math.sin(Math.PI * Math.min(1, Math.max(0, fill)));
+    const t: SloshTether = { cargo: cargoId, shell: shellId, k, damp: 1.5 + 4 * headroom, fill };
+    this.tethers.push(t);
+    return t;
+  }
 
   spawn(opts: {
     shape?: Shape; material?: string; sizeM?: number; pos?: Vec3; vel?: Vec3;
     tempC?: number; dragProfile?: string; massOverrideKg?: number; static?: boolean;
-    ghost?: boolean;
+    ghost?: boolean; spin?: Vec3; cargoOfId?: string; fillFrac?: number;
     scale?: Vec3; // non-uniform stretch (tank walls, beams) — volume/area scale along
   }): Body {
     const mat = MATERIALS[opts.material ?? "oak"];
@@ -68,33 +88,102 @@ export class EngineWorld {
       broken: false, molten: false, burning: false,
       fluid: null, isStatic: opts.static ?? false,
       hasMoved: false, settled: false, hitT: -10, ghost: opts.ghost ?? false,
+      spin: opts.spin ?? { x: 0, y: 0, z: 0 }, sloshM: 0, landedT: null,
       dragProfile, dragCd: DRAG_CD[dragProfile] ?? DRAG_CD.cube, areaM2: area,
       events: [],
     };
     this.bodies.push(b);
+    if (opts.cargoOfId) this.tether(b.id, opts.cargoOfId, opts.fillFrac ?? 1);
     return b;
   }
 
-  /** One fixed step. Returns event strings produced this step. */
+  /** One fixed step. Returns event strings produced this step.
+   * CCD-lite: fast steps subdivide so no body moves more than half its
+   * smallest extent per sub-integration (tunneling guard, ≤32 substeps). */
   step(dt: number): string[] {
     const out: string[] = [];
+    let nSub = 1;
+    for (const b of this.bodies) {
+      if (b.isStatic || (b.broken && b.molten)) continue;
+      const sp = Math.hypot(b.vel.x, b.vel.y, b.vel.z);
+      const char = b.shape === "sphere" ? b.radiusM : Math.min(b.halfM!.x, b.halfM!.y, b.halfM!.z);
+      if (char > 1e-6 && sp * dt > char * 0.5) {
+        nSub = Math.max(nSub, Math.min(32, Math.ceil((sp * dt) / (char * 0.5))));
+      }
+    }
+    const sdt = dt / nSub;
+    for (let k = 0; k < nSub; k++) {
+      this.tetherPass(sdt);
+      this.integrate(sdt, out);
+      this.collidePairs(out);
+      this.time += sdt;
+    }
+    return out;
+  }
+
+  /** Slosh pass: ghost cargo cores pull on their shells through a
+   * spring-damper (approx pendulum model, momentum-conserving, Euler-clamped). */
+  private tetherPass(dt: number): void {
+    for (const t of this.tethers) {
+      const c = this.bodies.find((b) => b.id === t.cargo);
+      const s = this.bodies.find((b) => b.id === t.shell);
+      if (!c || !s || c.isStatic) continue;
+      const dx = c.pos.x - s.pos.x, dy = c.pos.y - s.pos.y, dz = c.pos.z - s.pos.z;
+      const dvx = c.vel.x - s.vel.x, dvy = c.vel.y - s.vel.y, dvz = c.vel.z - s.vel.z;
+      c.sloshM = Math.hypot(dx, dy, dz);
+      const mMin = Math.max(1e-3, Math.min(c.massKg, s.isStatic ? Infinity : s.massKg));
+      const ke = Math.min(t.k, (0.25 * mMin) / (dt * dt));
+      const fx = -ke * dx - t.damp * dvx;
+      const fy = -ke * dy - t.damp * dvy;
+      const fz = -ke * dz - t.damp * dvz;
+      c.vel.x += (fx / c.massKg) * dt; c.vel.y += (fy / c.massKg) * dt; c.vel.z += (fz / c.massKg) * dt;
+      if (!s.isStatic) {
+        s.vel.x -= (fx / s.massKg) * dt; s.vel.y -= (fy / s.massKg) * dt; s.vel.z -= (fz / s.massKg) * dt;
+      }
+    }
+  }
+
+  /** One physics integration pass (no pair contact, no clock — step() drives). */
+  private integrate(dt: number, out: string[]): void {
     const air = FLUIDS.air;
     for (const b of this.bodies) {
       if (b.isStatic) continue; // tank walls, props — rendered, never integrated
       if (b.broken && b.molten) continue;
       // Gravity.
       b.vel.y -= this.env.gravity * dt;
-      // Quadratic air drag, capped at terminal velocity (Table 18 behavior).
-      const vt = terminalVelocity(b.massKg, b.dragCd, b.areaM2, this.env.airDensity);
+      // Quadratic air drag on AIR-RELATIVE velocity (wind counts). Cd rises
+      // through the transonic bump (approx). No terminal-velocity clamp:
+      // vt is the equilibrium fall speed, not a speed limit — supersonic
+      // launches must decelerate through drag, not teleport down to vt.
+      const rvx = b.vel.x - this.env.wind.x, rvy = b.vel.y - this.env.wind.y, rvz = b.vel.z - this.env.wind.z;
+      const rsp = Math.hypot(rvx, rvy, rvz);
       const sp = Math.hypot(b.vel.x, b.vel.y, b.vel.z);
       if (sp > 1.5) b.hasMoved = true;
-      if (sp > 1e-6) {
-        const dragF = 0.5 * this.env.airDensity * sp * sp * b.dragCd * b.areaM2;
+      if (rsp > 1e-6) {
+        const cdEff = b.dragCd * machCdFactor(rsp, this.env.ambientC);
+        const dragF = 0.5 * this.env.airDensity * rsp * rsp * cdEff * b.areaM2;
         const dv = (dragF / b.massKg) * dt;
-        const k = Math.max(0, 1 - dv / sp);
-        b.vel.x *= k; b.vel.y *= k; b.vel.z *= k;
-        const sp2 = Math.hypot(b.vel.x, b.vel.y, b.vel.z);
-        if (sp2 > vt) { const s = vt / sp2; b.vel.x *= s; b.vel.y *= s; b.vel.z *= s; }
+        const k = Math.max(0, 1 - dv / rsp);
+        b.vel.x = this.env.wind.x + rvx * k;
+        b.vel.y = this.env.wind.y + rvy * k;
+        b.vel.z = this.env.wind.z + rvz * k;
+        // Magnus lift for spinning bodies (approx curveball model, spheres mostly).
+        const spinMag = Math.hypot(b.spin.x, b.spin.y, b.spin.z);
+        if (spinMag > 1e-3 && rsp > 0.5) {
+          const r0 = b.shape === "sphere" ? b.radiusM : b.halfM!.y;
+          const cl = magnusCl(spinMag, r0, rsp);
+          // F = ½·ρ·v²·A·Cl along normalize(spin × vrel).
+          const cx = b.spin.y * rvz - b.spin.z * rvy;
+          const cy = b.spin.z * rvx - b.spin.x * rvz;
+          const cz = b.spin.x * rvy - b.spin.y * rvx;
+          const cm = Math.hypot(cx, cy, cz);
+          if (cm > 1e-9) {
+            const f = 0.5 * this.env.airDensity * rsp * rsp * b.areaM2 * cl / cm;
+            b.vel.x += (f * cx / b.massKg) * dt;
+            b.vel.y += (f * cy / b.massKg) * dt;
+            b.vel.z += (f * cz / b.massKg) * dt;
+          }
+        }
       }
       void air;
       // Fluids: submersion fraction → buoyancy counter-force + viscous damping.
@@ -128,9 +217,12 @@ export class EngineWorld {
       const r = b.shape === "sphere" ? b.radiusM : b.halfM!.y;
       if (b.pos.y <= r) {
         b.pos.y = r;
+        if (b.landedT === null && b.hasMoved) b.landedT = this.time;
         const impactV = Math.abs(b.vel.y);
         if (impactV > 0.5) {
-          const e = b.material.restitution;
+          // Pair-averaged restitution: body vs poured-concrete-ish ground
+          // (GROUND_E, gameplay-tuned) — same pair rule as body-vs-body.
+          const e = (b.material.restitution + GROUND_E) / 2;
           b.vel.y = impactV * e;
           // Horizontal friction bleed.
           const fr = Math.max(0, 1 - this.env.groundMuK * dt * 60 * 0.16);
@@ -196,9 +288,6 @@ export class EngineWorld {
       const dRad = (em * PHYSICS.STEFAN_BOLTZMANN * surf * (k4(Tamb) - k4(b.tempC))) / (b.massKg * c);
       b.tempC += (dConv + dRad) * dt;
     }
-    this.collidePairs(out);
-    this.time += dt;
-    return out;
   }
 
   /** Body-vs-body contact: sphere/sphere, box/box (AABB, no rotation in this
@@ -313,12 +402,13 @@ export class EngineWorld {
     return all;
   }
 
-  sample(): { t: number; bodies: { id: string; y: number; v: number; tempC: number; broken: boolean; molten: boolean; fluid: string | null }[]; fluids: { name: string; surfaceY: number }[] } {
+  sample(): { t: number; bodies: { id: string; y: number; v: number; tempC: number; broken: boolean; molten: boolean; fluid: string | null; landedT: number | null; sloshM: number }[]; fluids: { name: string; surfaceY: number }[] } {
     return {
       t: this.time,
       bodies: this.bodies.map((b) => ({
         id: b.id, y: b.pos.y, v: Math.hypot(b.vel.x, b.vel.y, b.vel.z),
         tempC: b.tempC, broken: b.broken, molten: b.molten, fluid: b.fluid,
+        landedT: b.landedT, sloshM: +b.sloshM.toFixed(3),
       })),
       fluids: this.fluids.map((f) => ({ name: f.name, surfaceY: f.max.y })),
     };

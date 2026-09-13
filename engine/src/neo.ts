@@ -122,7 +122,16 @@ const KNOWN_EXTRA = new Set([
   "hill", "balcony", "window", "drone", "helicopter", "plane", "airplane",
   "parachute", "skydive", "top", "peak", "summit", "ledge", "platform", "crane",
   "skyscraper", "building", "story", "storey", "ladder", "diving", "board",
-  // experiment talk
+  // follow-up + comparative + conditional + race talk (recognized, modify slots)
+  "again", "repeat", "rerun", "same", "twice", "thrice", "double", "doubled",
+  "half", "times", "bigger", "smaller", "larger", "heavier", "lighter",
+  "higher", "taller", "faster", "slower", "quicker", "percent",
+  "wall", "fence", "barrier", "first", "race", "races", "racing", "wins",
+  "lands", "land", "order", "rank", "ranked", "who", "tell",
+  "meant", "mean", "actually", "rather", "wrong", "instead",
+  "full", "empty", "quarter", "filled", "then", "cond", "branch", "slosh",
+  "spin", "spinning", "backspin", "topspin", "sidespin", "curveball", "curving",
+  "wind", "windy", "headwind", "tailwind",
   "experiment", "test", "trial", "demo", "simulation", "sim", "run", "repeat",
   "again", "versus", "against", "between", "compare", "strongest", "hardest",
   "toughest", "hottest", "coldest", "heaviest", "lightest", "biggest", "smallest",
@@ -228,6 +237,7 @@ function wordVariants(t: string): string[] {
 // ------------------------------------------------------------------- plan
 
 export interface NeoTarget { kind: "ground" | "fluid"; fluid?: string; word: string }
+export interface NeoObstacle { material: string; word: string; heightM: number }
 export interface NeoPlan {
   action: NeoAction | null;
   actionWord: string;
@@ -247,8 +257,28 @@ export interface NeoPlan {
   reportCapacity: boolean;
   /** Fluid carried INSIDE the body ("cube filled with water", "bucket of lava"). */
   containedFluid: string | null;
+  /** Fraction of the vessel filled 0..1 ("half full", "30% full"). Null = full/sealed. */
+  fillFrac: number | null;
+  /** Spin rad/s [x,y,z] ("backspin", "topspin", "curveball") — Magnus lift, approx. */
+  spin: [number, number, number] | null;
   /** Extra bodies from conjunctions ("steel and glass") — staged + judged together. */
   multi: NeoPlan[];
+  /** Conditional branch ("if the glass breaks, drop steel"). */
+  condIf: NeoPlan | null;
+  condThen: NeoPlan | null;
+  /** Landing-order race ("who lands first", "race steel vs glass"). */
+  raceOrder: boolean;
+  /** Obstacle the throw must clear ("over the wall into the pool"). */
+  obstacle: NeoObstacle | null;
+  /** Explicit-slot flags: true only when the sentence stated this slot. */
+  materialExplicit: boolean;
+  shapeExplicit: boolean;
+  planetExplicit: boolean;
+  heightExplicit: boolean;
+  sizeExplicit: boolean;
+  velExplicit: boolean;
+  /** Follow-up note when this plan inherits a previous turn ("again, but on Mars"). */
+  followupNote: string | null;
   target: NeoTarget;
   planet: string;
   confidence: number;
@@ -349,13 +379,194 @@ function pickActionToken(tokens: string[], raw: string, mem: NeoMemory | null): 
   return null;
 }
 
+/** Split "if X, (then) Y" / "if X breaks then Y" into two clauses. */
+export function splitConditional(input: string): { ifClause: string; thenClause: string } | null {
+  const raw = input.toLowerCase().trim();
+  if (!/^\s*if\b/.test(raw)) return null;
+  // "if the glass breaks, drop steel" · "if X then Y" · "if X, then Y"
+  const m = raw.match(/^\s*if\s+(.+?)(?:,?\s*\bthen\b\s+|,\s*)(.+)$/);
+  if (!m) return null;
+  const ifClause = m[1].trim(), thenClause = m[2].trim();
+  if (ifClause.length < 3 || thenClause.length < 3) return null;
+  return { ifClause, thenClause };
+}
+
+/** Minimal plan shell for conditional wrappers (filled by the caller). */
+function basePlan(input: string, _mem: NeoMemory | null): NeoPlan {
+  void _mem;
+  return {
+    action: null, actionWord: "", shape: "box", shapeWord: "cube",
+    material: "oak", materialWord: "", sizeM: 0.5, heightM: null,
+    velMs: null, angleDeg: null, tempC: null, pourFluid: null, acid: null,
+    altitudeM: null, reportCapacity: false, containedFluid: null, fillFrac: null,
+    spin: null, multi: [], condIf: null, condThen: null, raceOrder: false, obstacle: null,
+    materialExplicit: false, shapeExplicit: false, planetExplicit: false,
+    heightExplicit: false, sizeExplicit: false, velExplicit: false,
+    followupNote: null,
+    target: { kind: "ground", word: "ground" }, planet: "earth",
+    confidence: 0.5, steps: [], notes: [], unknown: [],
+  };
+}
+
+/** Fill fraction 0..1 from vessel phrasing ("half full", "30% full", "empty"). */
+export function parseFillFrac(raw: string): number | null {
+  if (/\bempty\b/.test(raw)) return 0;
+  if (/\bfull\b/.test(raw) && /\bhalf\b/.test(raw)) return 0.5;
+  if (/\bhalf[-\s]?full\b|\bhalf full\b|\bhalf-full\b/.test(raw)) return 0.5;
+  if (/\bquarter[-\s]?full\b/.test(raw)) return 0.25;
+  if (/\bthree[-\s]?quarter/.test(raw)) return 0.75;
+  const pct = raw.match(/(\d+(?:\.\d+)?)\s?%\s?(full|fill)/);
+  if (pct) return Math.min(1, Math.max(0, parseFloat(pct[1]) / 100));
+  if (/\bbrim|full to the (top|brim)|topped (up|off)\b/.test(raw)) return 1;
+  return null;
+}
+
+/** Obstacle a throw must clear ("over the wall into the pool"). */
+function parseObstacle(raw: string, tokens: string[]): NeoObstacle | null {
+  const m = raw.match(/\bover\s+(?:the\s+)?(?:(\w+)\s+)?(wall|fence|barrier|rampart|tank wall|glass wall)\b/);
+  if (!m) return null;
+  const matWord = (m[1] ?? "").trim();
+  const word = m[0].trim();
+  void tokens;
+  let material = "concrete";
+  if (matWord) {
+    for (const k of Object.keys(MATERIALS)) {
+      if (matWord === k || matWord === MATERIALS[k].name.toLowerCase().split(" ")[0]) { material = k; break; }
+    }
+    if (MAT_ALIAS[matWord]) material = MAT_ALIAS[matWord];
+  }
+  // A wall you throw OVER is chest-to-house height; default 3 m unless sized.
+  return { material, word, heightM: 3 };
+}
+
+/** Comparative math on quantities ("twice as big", "half the height"). Returns notes. */
+export function applyComparatives(raw: string, plan: NeoPlan): string[] {
+  const notes: string[] = [];
+  const clampSize = (v: number): number => Math.min(3, Math.max(0.05, v));
+  const scaleSize = (k: number, why: string): void => {
+    const before = plan.sizeM;
+    plan.sizeM = clampSize(plan.sizeM * k);
+    plan.sizeExplicit = true;
+    notes.push(`${why}: ${before.toFixed(2)} m → ${plan.sizeM.toFixed(2)} m.`);
+  };
+  const scaleHeight = (k: number, why: string): void => {
+    if (plan.heightM === null) {
+      // No base to scale (fragment like "half the height" with no setup yet):
+      // leave null so follow-up merge scales the inherited height instead.
+      notes.push(`${why}: no height stated here — scales the previous setup, if any.`);
+      return;
+    }
+    const before = plan.heightM;
+    plan.heightM = Math.min(86000, Math.max(0.5, plan.heightM * k));
+    plan.heightExplicit = true;
+    notes.push(`${why}: ${before.toFixed(1)} m → ${plan.heightM.toFixed(1)} m.`);
+  };
+  const scaleVel = (k: number, why: string): void => {
+    if (plan.velMs === null) {
+      notes.push(`${why}: no speed stated here — scales the previous setup, if any.`);
+      return;
+    }
+    const base = plan.velMs;
+    plan.velMs = Math.max(0.1, base * k);
+    plan.velExplicit = true;
+    notes.push(`${why}: ${base.toFixed(1)} m/s → ${plan.velMs.toFixed(1)} m/s.`);
+  };
+  const WORDN: Record<string, number> = {
+    twice: 2, thrice: 3, half: 0.5,
+    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10,
+  };
+  // "N times bigger/larger / N times as big" and "twice/three times the height/speed".
+  const timesM = raw.match(/\b(twice|thrice|half|one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s?(?:times|x|×)\s?(?:as\s+)?(big|bigger|larger|large|small|smaller|high|higher|tall|taller|fast|faster|slow|slower)?/);
+  if (timesM) {
+    const w = timesM[1];
+    const k = WORDN[w] ?? parseFloat(w);
+    const dim = timesM[2] ?? "big";
+    if (Number.isFinite(k) && k > 0) {
+      if (/high|tall|higher/.test(dim)) scaleHeight(k, `${w} the height`);
+      else if (/fast|faster|slow|slower/.test(dim)) scaleVel(k, `${w} the speed`);
+      else scaleSize(k, `${w} the size`);
+      return notes;
+    }
+  }
+  if (/\btwice as (big|large|bigger|larger)\b/.test(raw)) scaleSize(2, "twice as big");
+  else if (/\bhalf (as big|the size|as large)\b|\bhalf[-\s]?size\b/.test(raw)) scaleSize(0.5, "half the size");
+  else if (/\bthree times (?:as big|bigger|larger)\b/.test(raw)) scaleSize(3, "three times as big");
+  if (/\btwice (?:as high|the height|as tall)\b|\bdouble the height\b/.test(raw)) scaleHeight(2, "twice the height");
+  else if (/\bhalf the height\b|\bhalf as high\b/.test(raw)) scaleHeight(0.5, "half the height");
+  if (/\btwice as fast\b|\bdouble the speed\b/.test(raw)) scaleVel(2, "twice as fast");
+  else if (/\bhalf (?:as fast|the speed)\b/.test(raw)) scaleVel(0.5, "half the speed");
+  const pctM = raw.match(/(\d+(?:\.\d+)?)\s?%\s?(bigger|larger|smaller|faster|slower|higher|taller)/);
+  if (pctM) {
+    const p = parseFloat(pctM[1]) / 100;
+    const dim = pctM[2];
+    const k = /smaller|slower/.test(dim) ? Math.max(0.05, 1 - p) : 1 + p;
+    if (/higher|taller/.test(dim)) scaleHeight(k, `${pctM[1]}% ${dim}`);
+    else if (/faster|slower/.test(dim)) scaleVel(k, `${pctM[1]}% ${dim}`);
+    else scaleSize(k, `${pctM[1]}% ${dim}`);
+  }
+  // Bare imperatives ("make it bigger/heavier/higher/faster").
+  if (/\bmake it (bigger|larger)\b/.test(raw)) scaleSize(1.5, "make it bigger ×1.5");
+  else if (/\bmake it smaller\b/.test(raw)) scaleSize(1 / 1.5, "make it smaller ÷1.5");
+  else if (/\bmake it heavier\b/.test(raw)) scaleSize(Math.cbrt(2), "make it heavier (2× mass ≈ ×1.26 size)");
+  else if (/\bmake it lighter\b/.test(raw)) scaleSize(1 / Math.cbrt(2), "make it lighter (½ mass)");
+  else if (/\bmake it (higher|taller)\b/.test(raw)) scaleHeight(1.5, "make it higher ×1.5");
+  else if (/\bmake it (faster|quicker)\b/.test(raw)) scaleVel(1.5, "make it faster ×1.5");
+  else if (/\bmake it slower\b/.test(raw)) scaleVel(1 / 1.5, "make it slower ÷1.5");
+  return notes;
+}
+
 /** Parse a sentence into a NeoPlan. Pure function of (input, memory). */
 export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0): NeoPlan {
+  // Conditionals route first ("if the glass breaks, drop steel"): two setups,
+  // one branch. Depth-guarded so branches never recurse into conditionals.
+  if (depth === 0) {
+    const cond = splitConditional(input);
+    if (cond) {
+      const ifPlan = neoParse(cond.ifClause, mem, 1);
+      const thenPlan = neoParse(cond.thenClause, mem, 1);
+      // Inherit missing staging slots across the branch so "drop steel" drops
+      // from the same height as the glass it follows.
+      if (thenPlan.heightM === null && ifPlan.heightM !== null) thenPlan.heightM = ifPlan.heightM;
+      if (thenPlan.planet === "earth" && ifPlan.planet !== "earth" && !thenPlan.planetExplicit) thenPlan.planet = ifPlan.planet;
+      const base = basePlan(input, mem);
+      base.action = thenPlan.action;
+      base.actionWord = thenPlan.actionWord || "conditional";
+      base.material = thenPlan.material;
+      base.materialWord = thenPlan.materialWord;
+      base.shape = thenPlan.shape;
+      base.shapeWord = thenPlan.shapeWord;
+      base.sizeM = thenPlan.sizeM;
+      base.heightM = thenPlan.heightM;
+      base.velMs = thenPlan.velMs;
+      base.angleDeg = thenPlan.angleDeg;
+      base.tempC = thenPlan.tempC;
+      base.target = thenPlan.target;
+      base.planet = thenPlan.planet;
+      base.spin = thenPlan.spin;
+      base.planetExplicit = thenPlan.planetExplicit;
+      base.materialExplicit = thenPlan.materialExplicit;
+      base.shapeExplicit = thenPlan.shapeExplicit;
+      base.condIf = ifPlan;
+      base.condThen = thenPlan;
+      base.multi = [];
+      base.confidence = Math.min(ifPlan.confidence, thenPlan.confidence, 0.9);
+      base.steps = [
+        ["IF", `${ifPlan.material} ${ifPlan.shape} ${ifPlan.heightM ?? 10} m — breaks?`],
+        ["THEN", `${thenPlan.material} ${thenPlan.shape} ${thenPlan.heightM ?? 10} m`],
+        ["JUDGE", "condition sim first; consequent staged only if the break happens"],
+        ["TO", `${thenPlan.target.kind === "fluid" ? "fluid pool" : "solid ground"} → branch verdict below`],
+      ];
+      base.notes = [...ifPlan.notes, ...thenPlan.notes,
+        "conditional: two setups, one branch — the second runs only if the first breaks."];
+      base.unknown = [...new Set([...ifPlan.unknown, ...thenPlan.unknown])];
+      return base;
+    }
+  }
   const raw = input.toLowerCase();
   const tokens = raw.replace(/[^a-z0-9°/.\s-]/g, " ").split(/[\s-]+/).filter(Boolean);
 
-  const act = pickActionToken(tokens, raw, mem);
-  const action = act?.action ?? null;
+  let act = pickActionToken(tokens, raw, mem);
+  let action = act?.action ?? null;
   const shapeHit = pickShapeToken(tokens, mem);
   const matHit = pickMaterialToken(tokens, mem);
   const fluidHit = pickFluidToken(tokens);
@@ -591,7 +802,8 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
     && (containerWord !== null || action === "pour" || action === "build");
 
   // Effective velocity / angle / temperature (one truth for display + scenario).
-  const effVelMs = velHit ? velHit.value : phraseVelMs ?? (action === "throw" ? 6 : null);
+  // Mutable: comparative modifiers ("twice as fast") and follow-ups rescale them.
+  let effVelMs = velHit ? velHit.value : phraseVelMs ?? (action === "throw" ? 6 : null);
   const effAngleDeg = angHit ? angHit.value : angleWordDeg ?? (action === "throw" ? 25 : null);
   const effTempC = tempHit ? tempHit.value : null;
 
@@ -669,6 +881,45 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
       "°c", "°f", "°k", "degrees", "degree", "deg", "meter", "metre", "meters", "metres", "miles", "mile", "yards", "yard",
       "feet", "foot", "inches", "inch"].includes(t));
 
+  // Comparative modifiers ("twice as big", "half the height", "make it heavier"):
+  // math on quantities, applied to the fresh numbers BEFORE crowds/steps read them.
+  const sizeExplicitFresh = sizeRawM !== null || adjApplied;
+  {
+    const draft = { sizeM, heightM, velMs: effVelMs, action } as NeoPlan;
+    const compNotes = applyComparatives(raw, draft);
+    if (compNotes.length) {
+      sizeM = draft.sizeM; heightM = draft.heightM; effVelMs = draft.velMs;
+      if (draft.sizeExplicit) { /* size stated via math, not digits */ }
+      if (draft.heightExplicit) heightExplicit = true;
+      if (draft.velExplicit) { /* velocity rescaled */ }
+      notes.push(...compNotes);
+    }
+  }
+
+  // Vessel fill, throw obstacles, landing races, explicit-slot flags.
+  const fillFrac = parseFillFrac(raw);
+  const obstacle = (action === "throw" || action === "drop") ? parseObstacle(raw, tokens) : null;
+  // Spin ("backspin", "topspin", "curveball") — Magnus lift in the sim, approx
+  // curveball model; no tumbling orientation yet (said out loud in the note).
+  let spin: [number, number, number] | null = null;
+  if (/\bbackspin\b|\bback\s+spin\b/.test(raw)) spin = [0, 0, 100];
+  else if (/\btopspin\b|\btop\s+spin\b/.test(raw)) spin = [0, 0, -100];
+  else if (/\bcurveball\b|\bsidespin\b|\bside\s+spin\b|\bcurving\b/.test(raw)) spin = [0, 60, 0];
+  const raceOrder = (action === "drop" || action === "throw" || /\brace\b|\bwho\b.*\bfirst\b|\blanding order\b/.test(raw))
+    && /\bwho\s+(lands|hits|falls|reaches)\s+first\b|\bwhich\s+lands\s+first\b|\blanding\s+order\b|\brace\b|\btell\s+me\s+who\b|\bwho\s+wins\b/.test(raw);
+  const materialExplicit = !!matHit;
+  const shapeExplicit = !!shapeHit;
+  const planetExplicit = planet !== "earth" || /\bearth\b/.test(raw);
+  const velExplicit = !!velNumHit || phraseVelMs !== null;
+  if (fillFrac !== null && containedFluid) {
+    notes.push(fillFrac === 0 ? "empty vessel — shell only, no cargo mass."
+      : fillFrac === 1 ? "brim-full vessel — cargo mass at full interior."
+      : `${Math.round(fillFrac * 100)}% full — cargo mass scaled, slosh free-travel widened (approx pendulum model).`);
+  }
+  if (obstacle) notes.push(`${obstacle.word} stands in the flight path (${obstacle.heightM} m) — staged as a static wall, clearance judged live.`);
+  if (raceOrder) notes.push("landing-order race — every body timed to touchdown, order ranked in the verdict.");
+  if (spin) notes.push(`spin [${spin.join(", ")}] rad/s — Magnus curve in the sim (approx lift model; bodies don't tumble yet).`);
+
   // Confidence: filled slots over needed slots, minus unknown-word penalty.
   const need = [act ? 1 : 0, matHit ? 1 : 0, shapeHit ? 1 : 0,
     (heightM !== null || tempHit || velHit || phraseVelMs !== null) ? 1 : 0,
@@ -728,7 +979,7 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
     const V = shape === "sphere" ? (4 / 3) * Math.PI * (sizeM / 2) ** 3 : sizeM ** 3;
     capacityPreview = `holds ≈ ${(V * 1000).toFixed(0)} L`;
   }
-  const toStr = containedFluid
+  const toStrBase = containedFluid
     ? `${FLUIDS[containedFluid].name} sealed inside the ${shape} → carried along → splash on impact`
     : reportCapacity && target.kind === "fluid"
     ? `${FLUIDS[target.fluid!].name} fill → ${capacityPreview} — full report below`
@@ -737,6 +988,10 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
     : target.kind === "fluid"
     ? `${FLUIDS[target.fluid!].name} pool → splash → ${mat.density < (FLUIDS[target.fluid!].density ?? 1e9) ? "float" : "sink"}`
     : "solid ground → impact vs strength";
+  const toStr = (obstacle ? `over the ${obstacle.word} (${obstacle.heightM} m) → ` : "")
+    + toStrBase
+    + (raceOrder ? " → ranked by touchdown" : "")
+    + (fillFrac !== null && containedFluid && fillFrac < 1 ? ` (${Math.round(fillFrac * 100)}% full)` : "");
   const steps: [string, string][] = [
     ["WHAT", act ? `${action} (“${act.word}”)${multi.length ? ` × ${multi.length + 1} bodies` : ""}` : "—"],
     ["OBJECT", objStr],
@@ -744,7 +999,7 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
     ["TO", toStr],
   ];
 
-  return {
+  const fresh: NeoPlan = {
     action, actionWord: act?.word ?? "", shape, shapeWord,
     material, materialWord,
     sizeM, heightM,
@@ -753,9 +1008,89 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
     tempC: effTempC,
     pourFluid: action === "pour" ? (fluidHit?.id ?? "water") : null,
     acid, altitudeM,
-    reportCapacity, containedFluid, multi,
+    reportCapacity, containedFluid, fillFrac, spin, multi,
+    condIf: null, condThen: null, raceOrder, obstacle,
+    materialExplicit, shapeExplicit, planetExplicit,
+    heightExplicit, sizeExplicit: sizeExplicitFresh, velExplicit,
+    followupNote: null,
     target, planet, confidence, steps, notes, unknown,
   };
+  // Cross-turn follow-ups ("again, but on Mars", "make it heavier",
+  // "no, I meant a steel cube") revise the last setup instead of restarting.
+  return resolveFollowup(input, mem, fresh, depth);
+}
+
+/** Decide whether this turn revises the previous setup, and merge if so. */
+export function resolveFollowup(input: string, mem: NeoMemory | null, fresh: NeoPlan, depth: number): NeoPlan {
+  if (depth !== 0 || !mem?.lastPlan) return fresh;
+  const last = mem.lastPlan;
+  if (last.condIf || fresh.condIf) return fresh; // conditionals stand alone
+  const raw = input.toLowerCase();
+  const isCorrection = /^\s*(no[,. ]|not |wrong|i meant|i mean|actually|rather)/.test(raw);
+  const hasAgain = /\bagain\b|\brepeat\b|\brerun\b|\bsame\b/.test(raw);
+  const hasMakeIt = /\bmake it\b|\bbut on\b|\bbut with\b|\bnow on\b/.test(raw);
+  const hasComparative = /\btwice\b|\bthrice\b|\bhalf the\b|\bhalf as\b|\bdouble\b|\btimes\b|\bmake it (bigger|smaller|heavier|lighter|higher|faster|slower)\b|\d+\s?%\s?(bigger|larger|smaller)/.test(raw);
+  const hasIt = /\bit\b/.test(raw);
+  const freshThin = !fresh.action || !fresh.materialExplicit;
+  const short = raw.split(/\s+/).filter(Boolean).length <= 10;
+  const wantsMerge = isCorrection || hasAgain || hasMakeIt
+    || (hasComparative && freshThin) || (hasIt && short && freshThin);
+  if (!wantsMerge) return fresh;
+  // Merge: inherit everything, override only what this sentence states.
+  const merged: NeoPlan = JSON.parse(JSON.stringify(last)) as NeoPlan;
+  merged.multi = fresh.multi.length ? fresh.multi : [];
+  merged.condIf = null; merged.condThen = null;
+  const changes: string[] = [];
+  if (fresh.action) { merged.action = fresh.action; merged.actionWord = fresh.actionWord; changes.push(`verb → ${fresh.action}`); }
+  if (fresh.materialExplicit) { merged.material = fresh.material; merged.materialWord = fresh.materialWord; changes.push(`material → ${MATERIALS[fresh.material]?.name ?? fresh.material}`); }
+  if (fresh.shapeExplicit) { merged.shape = fresh.shape; merged.shapeWord = fresh.shapeWord; changes.push(`shape → ${fresh.shape}`); }
+  if (fresh.planetExplicit) { merged.planet = fresh.planet; changes.push(`planet → ${fresh.planet}`); }
+  if (fresh.heightExplicit && fresh.heightM !== null) { merged.heightM = fresh.heightM; changes.push(`height → ${fresh.heightM} m`); }
+  if (fresh.sizeExplicit) { merged.sizeM = fresh.sizeM; changes.push(`size → ${fresh.sizeM} m`); }
+  if (fresh.velExplicit && fresh.velMs !== null) { merged.velMs = fresh.velMs; changes.push(`speed → ${fresh.velMs} m/s`); }
+  if (fresh.tempC !== null) { merged.tempC = fresh.tempC; changes.push(`temp → ${fresh.tempC}°C`); }
+  if (fresh.target.kind === "fluid" || /\bground\b|\bfloor\b/.test(raw)) { merged.target = fresh.target; changes.push(`target → ${fresh.target.word}`); }
+  if (fresh.containedFluid) { merged.containedFluid = fresh.containedFluid; changes.push(`cargo → ${fresh.containedFluid}`); }
+  if (fresh.spin) { merged.spin = fresh.spin; changes.push(`spin → [${fresh.spin.join(", ")}]`); }
+  if (fresh.fillFrac !== null) { merged.fillFrac = fresh.fillFrac; changes.push(`fill → ${Math.round(fresh.fillFrac * 100)}%`); }
+  if (fresh.obstacle) { merged.obstacle = fresh.obstacle; changes.push(`obstacle → ${fresh.obstacle.word}`); }
+  if (fresh.raceOrder) merged.raceOrder = true;
+  if (fresh.reportCapacity) merged.reportCapacity = true;
+  // Comparatives apply to the INHERITED base ("make it heavier" doubles last mass).
+  const compNotes = applyComparatives(raw, merged);
+  if (compNotes.length) changes.push(...compNotes.map((n) => n.replace(/\.$/, "")));
+  const kind = isCorrection ? "correction" : hasAgain || hasMakeIt ? "follow-up" : "pronoun follow-up";
+  merged.followupNote = `${kind} of "${(mem.lastPrompt ?? "").slice(0, 60)}"${changes.length ? `: ${changes.join("; ")}` : " — repeated as-is"}`;
+  merged.notes = [merged.followupNote,
+    // Default-assumption notes from the fresh fragment are stale: the merged
+    // slots came from the previous setup, not from defaults. Fresh scaling
+    // lines are stale too when re-applied below (they used the default base).
+    ...fresh.notes.filter((n) => {
+      if (/no material named/.test(n)) return false;
+      if (/no shape named/.test(n)) return false;
+      if (/no action word found/.test(n)) return merged.action === null;
+      if (compNotes.length && /→/.test(n) && /(big|size|height|speed|fast|slow|heav|light|tall|high|twice|half|double|times|%)/i.test(n)) return false;
+      return true;
+    }),
+    ...compNotes];
+  // Rebuild the four pipeline steps from merged values (single truth for UI + scenario).
+  const mm = MATERIALS[merged.material] ?? MATERIALS.oak;
+  const massKg = mm.density * (merged.shape === "sphere" ? (4 / 3) * Math.PI * merged.sizeM ** 3 : (2 * merged.sizeM) ** 3);
+  const fmtV = (v: number): string => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M m/s` : v >= 10000 ? `${(v / 1000).toFixed(1)}k m/s` : `${+v.toFixed(1)} m/s`;
+  const fb: string[] = [];
+  if (merged.heightM !== null) fb.push(`${merged.heightM} m up`);
+  if (merged.velMs !== null) fb.push(fmtV(merged.velMs));
+  if (merged.angleDeg !== null && merged.velMs !== null) fb.push(`@ ${merged.angleDeg}°`);
+  if (merged.tempC !== null) fb.push(`${merged.tempC.toFixed(0)}°C`);
+  merged.steps = [
+    ["WHAT", merged.action ? `${merged.action} (“${merged.actionWord}”)` : "—"],
+    ["OBJECT", `${mm.name} ${merged.shape} (${massKg.toFixed(0)} kg, ${merged.sizeM} m)`],
+    ["FROM", fb.length ? fb.join(", ") : "placed in the world"],
+    ["TO", merged.target.kind === "fluid" ? `${merged.target.word} pool` : "solid ground → impact vs strength"],
+  ];
+  merged.confidence = Math.min(0.95, Math.max(fresh.confidence, last.confidence, 0.5));
+  merged.unknown = fresh.unknown;
+  return merged;
 }
 
 // ------------------------------------------------- sentence-space + dataset
@@ -824,6 +1159,8 @@ export interface NeoMemoryJSON {
   aliases: Record<string, { slot: "verb" | "material" | "shape"; value: string; hits: number }>;
   unknownWords: Record<string, number>;
   history: { input: string; action: string; material: string }[];
+  lastPrompt?: string;
+  lastPlan?: NeoPlan | null;
 }
 
 const MEM_KEY = "neo-memory-v1";
@@ -833,6 +1170,8 @@ export class NeoMemory {
   aliases: NeoMemoryJSON["aliases"] = {};
   unknownWords: Record<string, number> = {};
   history: NeoMemoryJSON["history"] = [];
+  lastPrompt: string | null = null;
+  lastPlan: NeoPlan | null = null;
 
   /** A learned word overrides the grammar only after it proved itself (hits ≥ 2). */
   resolve(slot: "verb" | "material" | "shape", token: string): string | null {
@@ -856,6 +1195,14 @@ export class NeoMemory {
     for (const u of plan.unknown) this.unknownWords[u] = (this.unknownWords[u] ?? 0) + 1;
     this.history.push({ input: input.slice(0, 140), action: plan.action ?? "?", material: plan.material });
     if (this.history.length > 50) this.history = this.history.slice(-50);
+    // Cross-turn memory: keep the last full setup so "again, but on Mars",
+    // "make it heavier", and "no, I meant steel" revise instead of restarting.
+    // Stored without nested conditionals/multi to bound localStorage size.
+    try {
+      const slim: NeoPlan = { ...plan, multi: [], condIf: null, condThen: null };
+      this.lastPlan = JSON.parse(JSON.stringify(slim)) as NeoPlan;
+      this.lastPrompt = input.slice(0, 140);
+    } catch { this.lastPlan = null; }
   }
 
   stats(): { runs: number; words: number; unknown: number } {
@@ -864,7 +1211,7 @@ export class NeoMemory {
   }
 
   toJSON(): NeoMemoryJSON {
-    return { version: 1, runs: this.runs, aliases: this.aliases, unknownWords: this.unknownWords, history: this.history };
+    return { version: 1, runs: this.runs, aliases: this.aliases, unknownWords: this.unknownWords, history: this.history, lastPrompt: this.lastPrompt ?? undefined, lastPlan: this.lastPlan ?? undefined };
   }
 
   static load(store: NeoStore): NeoMemory {
@@ -875,6 +1222,7 @@ export class NeoMemory {
       const j = JSON.parse(raw) as NeoMemoryJSON;
       if (j.version !== 1) return m;
       m.runs = j.runs; m.aliases = j.aliases; m.unknownWords = j.unknownWords; m.history = j.history;
+      m.lastPrompt = j.lastPrompt ?? null; m.lastPlan = j.lastPlan ?? null;
     } catch { /* corrupt memory → fresh brain, game still runs */ }
     return m;
   }
@@ -888,11 +1236,14 @@ export class NeoMemory {
 
 /** Which engine tool answers this plan (shown in UI so Neo's choice is inspectable). */
 export function neoToolFor(plan: NeoPlan): { tool: string; why: string } {
+  if (plan.condIf && plan.condThen) {
+    return { tool: "scenario", why: "conditional branch — condition sim first, consequent staged only if the break happens" };
+  }
   if (plan.reportCapacity) {
     return { tool: "verdict", why: "capacity report — interior volume × fluid density, closed form" };
   }
-  if (plan.multi.length > 0) {
-    return { tool: "scenario", why: `rigid-body sim × ${plan.multi.length + 1} bodies: gravity, drag, impact stress each at 120 Hz` };
+  if (plan.multi.length > 0 || plan.raceOrder) {
+    return { tool: "scenario", why: `rigid-body sim × ${plan.multi.length + 1} bodies: gravity, drag, impact stress each at 120 Hz${plan.raceOrder ? " + touchdown ranking" : ""}` };
   }
   switch (plan.action) {
     case "melt": case "burn": case "freeze": case "boil": case "scratch":
@@ -916,7 +1267,8 @@ export function neoToolFor(plan: NeoPlan): { tool: string; why: string } {
 
 /** Actions judged by closed-form experience() instead of a drop scenario. */
 export function neoNeedsExperience(plan: NeoPlan): boolean {
-  if (plan.multi.length > 0) return false; // crowds always go live
+  if (plan.condIf && plan.condThen) return false; // branches always go live
+  if (plan.multi.length > 0 || plan.raceOrder) return false; // crowds/races always go live
   return plan.reportCapacity
     || plan.action === "electrify" || plan.action === "dissolve"
     || plan.action === "lase" || plan.action === "roll" || plan.action === "orbit";
@@ -926,13 +1278,20 @@ export function neoNeedsExperience(plan: NeoPlan): boolean {
 export function neoScenario(plan0: NeoPlan): ScenarioDesc {
   const bodies: NonNullable<ScenarioDesc["bodies"]> = [];
   const checks: NonNullable<ScenarioDesc["checks"]> = [];
-  const all = [plan0, ...plan0.multi];
+  // Conditional branches stage BOTH setups side by side (x-separated, no
+  // interaction): the verdict sims the condition first and judges the
+  // consequent as the branch taken when the break happens.
+  const isBranch = !!(plan0.condIf && plan0.condThen);
+  const all = isBranch ? [plan0.condIf!, plan0.condThen!] : [plan0, ...plan0.multi];
+  const planStarts: number[] = [];
   for (const [bi, plan] of all.entries()) {
+    planStarts[bi] = bodies.length;
   const mat = MATERIALS[plan.material] ?? MATERIALS.oak;
   const H = plan.heightM ?? 10;
   const at = (c: NonNullable<ScenarioDesc["checks"]>[number]): void => {
     // Body index travels with the check so multi-body verdicts judge each body.
-    checks.push(all.length > 1 ? { ...c, body: bi } as typeof c : c);
+    // Branch bodies keep their own indices (0 = condition, 1 = consequent).
+    checks.push(all.length > 1 || isBranch ? { ...c, body: bi } as typeof c : c);
   };
   switch (plan.action) {
     case "throw":
@@ -995,28 +1354,77 @@ export function neoScenario(plan0: NeoPlan): ScenarioDesc {
           at({ kind: "floats-in", fluid: plan.target.fluid });
         }
     }
-    // Sealed cargo: a ghost fluid core riding inside the shell — same
-    // ballistics (shell-matched mass), no contact eject. The verdict judges
-    // the shell; the core splashes live in the world.
+    // Sealed cargo: a ghost fluid core riding inside the shell on a
+    // spring-damper tether (approx pendulum slosh, NOT CFD). Fill fraction
+    // sets the cargo mass AND the free travel: a half-full bucket is lighter
+    // and sloshes harder than a brim-full one. The verdict judges the shell;
+    // the core splashes live in the world.
     if (plan.containedFluid && (plan.action === "drop" || plan.action === "throw" || plan.action === null)) {
-      const shellMass = (MATERIALS[plan.material] ?? MATERIALS.oak).density
-        * (plan.shape === "sphere" ? (4 / 3) * Math.PI * plan.sizeM ** 3 : (2 * plan.sizeM) ** 3);
-      const core: NonNullable<ScenarioDesc["bodies"]>[number] = {
-        shape: plan.shape, material: MATERIALS[plan.containedFluid] ? plan.containedFluid : "water",
-        sizeM: plan.sizeM, heightM: H, ghost: true, massKg: shellMass,
-        dragProfile: plan.shape === "sphere" ? "sphere" : "cube",
-      };
-      if (plan.action === "throw") {
-        core.vel = [
-          (plan.velMs ?? 6) * Math.cos(((plan.angleDeg ?? 25) * Math.PI) / 180),
-          (plan.velMs ?? 6) * Math.sin(((plan.angleDeg ?? 25) * Math.PI) / 180), 0,
-        ];
+      const fill = plan.fillFrac ?? 1;
+      if (fill > 0) {
+        const fluidD = FLUIDS[plan.containedFluid]?.density ?? 1000;
+        const vol = plan.shape === "sphere" ? (4 / 3) * Math.PI * plan.sizeM ** 3 : (2 * plan.sizeM) ** 3;
+        const coreMass = Math.max(0.01, fluidD * vol * fill);
+        const shellIdx = bodies.length - 1;
+        const core: NonNullable<ScenarioDesc["bodies"]>[number] = {
+          shape: plan.shape, material: MATERIALS[plan.containedFluid] ? plan.containedFluid : "water",
+          sizeM: plan.sizeM, heightM: H, ghost: true, massKg: coreMass,
+          fillFrac: fill, cargoOf: shellIdx,
+          dragProfile: plan.shape === "sphere" ? "sphere" : "cube",
+        };
+        if (plan.action === "throw") {
+          core.vel = [
+            (plan.velMs ?? 6) * Math.cos(((plan.angleDeg ?? 25) * Math.PI) / 180),
+            (plan.velMs ?? 6) * Math.sin(((plan.angleDeg ?? 25) * Math.PI) / 180), 0,
+          ];
+        }
+        bodies.push(core);
       }
-      bodies.push(core);
     }
   } // end per-body staging
+  // Lane separation: each setup gets its own x lane so crowds/branches never
+  // start interpenetrated (the old overlap-eject glitch). Bodies staged by
+  // the SAME plan share a lane (the crusher drops onto its target, cargo
+  // rides its shell); different plans stand 6 m apart.
+  {
+    for (const [bi, start] of planStarts.entries()) {
+      const end = bi + 1 < planStarts.length ? planStarts[bi + 1] : bodies.length;
+      for (let i = start; i < end; i++) {
+        const b = bodies[i];
+        if (b.static || b.x !== undefined) continue;
+        b.x = bi * 6;
+      }
+    }
+  }
+  // Obstacle wall ("over the wall into the pool"): a static slab standing in
+  // the flight lane; clearance is judged live from the trajectory.
+  if (plan0.obstacle && !isBranch) {
+    const laneX = bodies.length ? Math.max(...bodies.map((b) => b.x ?? 0)) + 8 : 8;
+    const wallHalf = plan0.obstacle.heightM / 2;
+    bodies.push({
+      shape: "box", material: plan0.obstacle.material, sizeM: wallHalf,
+      heightM: wallHalf, x: laneX, static: true,
+    });
+    checks.push({ kind: "clears-wall", wall: bodies.length - 1 });
+  }
+  if (plan0.raceOrder) checks.push({ kind: "lands-first" });
+  // Spin travels onto each plan's primary body (first non-static, non-ghost).
+  for (const [bi, start] of planStarts.entries()) {
+    const plan = all[bi];
+    if (!plan.spin) continue;
+    const end = bi + 1 < planStarts.length ? planStarts[bi + 1] : bodies.length;
+    for (let i = start; i < end; i++) {
+      const b = bodies[i];
+      if (b.static || b.ghost) continue;
+      b.spin = plan.spin;
+      break;
+    }
+  }
+  // Branch marker travels so the verdict narrates the taken branch instead of
+  // a crowd: bodies[0] is the condition, bodies[1] the consequent.
+  const branch = isBranch ? { ifBody: 0, thenBody: 1 } : undefined;
   return {
-    env: plan0.planet, durationS: 10, bodies, checks,
+    env: plan0.planet, durationS: 10, bodies, checks, branch,
     ...(plan0.altitudeM !== null ? { airDensity: altitudeDensity(plan0.altitudeM) } : {}),
   };
 }

@@ -50,6 +50,32 @@ export function reposeOk(repose: [number, number], angleDeg: number): string {
 }
 /** Drag profile lookup with fallback. */
 export function dragCd(profile: string): number { return DRAG_CD[profile] ?? DRAG_CD.cube; }
+/** Transonic drag-rise factor on a base Cd (approx, wind-tunnel-curve fit).
+ * Subsonic ≈1, Mach 1 bump ≈1.9×, supersonic plateau ≈1.25×. Constant-Cd
+ * ballistics under-read the wall near Mach 1 by almost half — this closes it. */
+export function machCdFactor(vMs: number, tempC = 15): number {
+  const c = 331.3 * Math.sqrt(Math.max(1, tempC + 273.15) / 273.15);
+  const M = Math.max(0, vMs) / c;
+  if (M < 0.8) return 1;
+  if (M <= 1.2) {
+    const x = (M - 0.8) / 0.4; // 0→1 across the bump
+    return 1 + 0.9 * Math.sin(Math.PI * Math.min(1, x * 1.15));
+  }
+  return 1.25;
+}
+/** Magnus lift coefficient from spin parameter S = ωR/v (approx baseball-curve
+ * fit, spheres; boxes tumble instead of lifting — caller gates by shape). */
+export function magnusCl(spinRadS: number, radiusM: number, vMs: number): number {
+  if (vMs < 1e-6) return 0;
+  const S = (Math.abs(spinRadS) * Math.max(0, radiusM)) / vMs;
+  return Math.min(0.5, 0.12 * S);
+}
+/** Biot number Bi = h·Lc/k: ≤0.1 means uniform body temperature is honest;
+ * above it the core lags the skin and lumped-capacitance times are bounds. */
+export function biotNumber(hWm2K: number, charLenM: number, kWmK: number): number {
+  if (kWmK <= 0 || charLenM <= 0) return NaN;
+  return (hWm2K * charLenM) / kWmK;
+}
 /** Stokes-regime drag force in a viscous fluid (low Reynolds spheres). */
 export function viscousDrag(viscosityPas: number, radiusM: number, vMs: number): number {
   return 6 * Math.PI * viscosityPas * radiusM * vMs;

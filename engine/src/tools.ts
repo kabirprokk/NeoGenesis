@@ -178,7 +178,9 @@ export const TOOLS: ToolDef[] = [
         let touchX = 0;
         for (let i = 0; i < 120 * 12; i++) {
           w.step(1 / 120);
-          if (b.pos.y <= b.radiusM + 1e-6) { touchX = b.pos.x; break; }
+          // Engine-tracked touchdown (exact substep), not end-of-step sampling:
+          // post-bounce substeps leave y above rest, which coarse sampling misses.
+          if (b.landedT !== null) { touchX = b.pos.x; break; }
         }
         check("vacuum range 30m/s@45°", vx0 * tF, touchX, 2);
       }
@@ -214,11 +216,11 @@ export const TOOLS: ToolDef[] = [
       return { codex: CODEX_VERSION, checks, maxErrPct: +maxErr.toFixed(2), allPass: checks.every((c) => c.pass) };
     }),
   // ---- simulation (stateful world in ctx) ----
-  def("sim-spawn", "Spawn a body (or registry model by index) into the world.", T([], [["material", "string", "default oak"], ["sizeM", "number", "default 1"], ["shape", "string", "box|sphere"], ["heightM", "number", "default 10"], ["modelIndex", "number", "optional registry spawn"], ["tempC", "number", "optional"], ["ghost", "boolean", "nested cargo: skips body contact"]]),
+  def("sim-spawn", "Spawn a body (or registry model by index) into the world.", T([], [["material", "string", "default oak"], ["sizeM", "number", "default 1"], ["shape", "string", "box|sphere"], ["heightM", "number", "default 10"], ["modelIndex", "number", "optional registry spawn"], ["tempC", "number", "optional"], ["ghost", "boolean", "nested cargo: skips body contact"], ["spin", "number", "optional z spin rad/s (Magnus lift, approx)"]]),
     (a, ctx) => {
       const w = W(ctx);
       if (a.modelIndex !== undefined) return { id: spawnModel(w, num(a, "modelIndex"), { x: 0, y: num(a, "heightM", 10), z: 0 }) };
-      const b = w.spawn({ shape: (str(a, "shape", "box") === "sphere" ? "sphere" : "box"), material: str(a, "material", "oak"), sizeM: num(a, "sizeM", 1), pos: { x: 0, y: num(a, "heightM", 10), z: 0 }, tempC: a.tempC !== undefined ? num(a, "tempC") : undefined, ghost: a.ghost === true });
+      const b = w.spawn({ shape: (str(a, "shape", "box") === "sphere" ? "sphere" : "box"), material: str(a, "material", "oak"), sizeM: num(a, "sizeM", 1), pos: { x: 0, y: num(a, "heightM", 10), z: 0 }, tempC: a.tempC !== undefined ? num(a, "tempC") : undefined, ghost: a.ghost === true, spin: a.spin !== undefined ? { x: 0, y: 0, z: num(a, "spin") } : undefined });
       return { id: b.id, massKg: +b.massKg.toFixed(1) };
     }),
   def("sim-run", "Step the world N seconds at 120 Hz. Returns events.", T([], [["seconds", "number", "default 5"]]),
@@ -226,7 +228,7 @@ export const TOOLS: ToolDef[] = [
   def("sim-list", "All live bodies + state.", T([], []), (a, ctx) => W(ctx).sample()),
   def("sim-remove", "Remove a body by id.", T(["id"], [["id", "string", "body id"]]),
     (a, ctx) => { const w = W(ctx); const n = w.bodies.length; w.bodies = w.bodies.filter((b) => b.id !== str(a, "id")); return { removed: n - w.bodies.length }; }),
-  def("sim-reset", "Clear world + clock.", T([], []), (a, ctx) => { const w = W(ctx); w.bodies = []; w.fluids = []; w.time = 0; w.log = []; return { ok: true }; }),
+  def("sim-reset", "Clear world + clock.", T([], []), (a, ctx) => { const w = W(ctx); w.bodies = []; w.fluids = []; w.tethers = []; w.time = 0; w.log = []; return { ok: true }; }),
   def("sim-fluid", "Pour a fluid pool into the world (visible tank of real fluid).", T(["name", "x", "z"], [["name", "string", "fluid id"], ["x", "number", "center x"], ["z", "number", "center z"], ["halfM", "number", "half-size, default 3"], ["depthM", "number", "default 2"]]),
     (a, ctx) => {
       const w = W(ctx);
@@ -236,7 +238,7 @@ export const TOOLS: ToolDef[] = [
       w.addFluid({ name: f.name, min: { x: x - half, y: 0, z: z - half }, max: { x: x + half, y: depth, z: z + half }, density: f.density ?? 1000, viscosity: f.viscosity });
       return { pool: f.name, surfaceY: depth };
     }),
-  def("sim-env", "Set gravity/ambient/air by planet preset or raw values.", T([], [["planet", "string", "optional preset"], ["gravity", "number", "optional"], ["ambientC", "number", "optional"], ["airDensity", "number", "optional"]]),
+  def("sim-env", "Set gravity/ambient/air/wind by planet preset or raw values.", T([], [["planet", "string", "optional preset"], ["gravity", "number", "optional"], ["ambientC", "number", "optional"], ["airDensity", "number", "optional"], ["wind", "number", "optional +x wind m/s (tailwind for +x throws)"]]),
     (a, ctx) => {
       const w = W(ctx);
       const p = str(a, "planet") ? PLANETS[str(a, "planet")] : undefined;
@@ -244,6 +246,7 @@ export const TOOLS: ToolDef[] = [
       if (a.gravity !== undefined) w.env.gravity = num(a, "gravity");
       if (a.ambientC !== undefined) w.env.ambientC = num(a, "ambientC");
       if (a.airDensity !== undefined) w.env.airDensity = num(a, "airDensity");
+      if (a.wind !== undefined) w.env.wind = { x: num(a, "wind"), y: 0, z: 0 };
       return { env: w.env };
     }),
   // ---- experience ----

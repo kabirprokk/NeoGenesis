@@ -13,7 +13,13 @@ shadow frustum follows you. Meshes are pooled per body id and removed on
 cleanup (no heap bleed).
 
 Honest limits: bodies collide pairwise (sphere/sphere, box/box, sphere/box —
-impulse with pair-averaged restitution, fracture on hard hits) but there is no
-rotational dynamics and no continuous collision (relativistic speeds tunnel);
-the engine has no freeze or corrosion kinetics (cold is staged, corrosion is a
-table verdict); and fluids are box volumes, not free-surface waves.
+impulse with pair-averaged restitution, fracture on hard hits) with CCD-lite
+substeps (no tunneling up to ~3 km/s against metre-scale walls; beyond that,
+or past 32 substeps, all bets off); spin exists as Magnus lift on moving
+bodies (backspin sails, topspin dives — approx curveball fit) but bodies don't
+tumble, so there is still no true rotational dynamics; the engine has no
+freeze or corrosion kinetics (cold is staged, corrosion is a table verdict);
+heat is lumped-capacitance with a Biot-number flag (Bi > 0.1 warns the core
+lags the skin — no internal conduction); and fluids are box volumes, not
+free-surface waves. Slosh inside carried vessels is an approx spring-damper
+tether (half-full sloshes loosest), not CFD.

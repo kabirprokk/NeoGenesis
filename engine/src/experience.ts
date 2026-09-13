@@ -38,9 +38,11 @@ export interface ExperienceResult {
 }
 export interface ScenarioDesc {
   env?: string; gravity?: number; ambientC?: number; airDensity?: number;
-  durationS?: number;
-  bodies?: { shape?: "sphere" | "box"; material?: string; sizeM?: number; heightM?: number; vel?: [number, number, number]; tempC?: number; dragProfile?: string; ghost?: boolean; massKg?: number }[];
-  checks?: ({ kind: "survives-fall"; heightM: number; body?: number } | { kind: "floats-in"; fluid: string; body?: number } | { kind: "scratch"; tool: string; target: string; body?: number } | { kind: "melt-at"; tempC: number; body?: number } | { kind: "hear-at"; distM: number; mediumMs?: number })[];
+  wind?: [number, number, number]; durationS?: number;
+  bodies?: { shape?: "sphere" | "box"; material?: string; sizeM?: number; heightM?: number; vel?: [number, number, number]; tempC?: number; dragProfile?: string; ghost?: boolean; massKg?: number; x?: number; static?: boolean; fillFrac?: number; cargoOf?: number; spin?: [number, number, number] }[];
+  checks?: ({ kind: "survives-fall"; heightM: number; body?: number } | { kind: "floats-in"; fluid: string; body?: number } | { kind: "scratch"; tool: string; target: string; body?: number } | { kind: "melt-at"; tempC: number; body?: number } | { kind: "hear-at"; distM: number; mediumMs?: number } | { kind: "lands-first" } | { kind: "clears-wall"; wall?: number; body?: number })[];
+  /** Conditional branch marker: bodies[ifBody] is the condition, bodies[thenBody] the consequent. */
+  branch?: { ifBody: number; thenBody: number };
 }
 
 const reason = (r: ExperienceResult, v: Verdict, c: number, text: string) => {
@@ -106,6 +108,68 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
   let fluidId = "water";
   for (const k of Object.keys(FLUIDS)) if (p.includes(k)) { fluidId = k; break; }
 
+  // 0a. CONDITIONALS — "if the glass breaks, drop steel": two setups, one branch.
+  // The condition sims first; the consequent is judged as the live branch only
+  // when the break happens, otherwise as its own staged setup.
+  {
+    const cm = p.match(/^\s*if\s+(.+?)(?:,?\s*\bthen\b\s+|,\s*)(.+)$/);
+    if (cm && cm[1].length > 2 && cm[2].length > 2) {
+      const ifR = experience(cm[1]);
+      const thenR = experience(cm[2]);
+      const broken = ifR.measurements.broken === true
+        || ifR.events.join(" ").includes("SHATTER")
+        || ifR.reasons.join(" ").includes("SHATTERED");
+      thenR.prompt = input;
+      thenR.environment = envName;
+      thenR.measurements = { ...thenR.measurements, conditionMet: broken, conditionPrompt: cm[1].slice(0, 80) };
+      cite(thenR, "nist", "isa");
+      if (broken) {
+        thenR.reasons.unshift(`IF TRUE: "${cm[1].slice(0, 70)}" breaks — branch taken, consequent judged live below.`);
+      } else {
+        thenR.reasons.unshift(`IF FALSE: "${cm[1].slice(0, 70)}" holds — consequent never triggers; judged as its own staged setup.`);
+      }
+      return thenR;
+    }
+  }
+
+  // 0b. LANDING-ORDER RACES — "drop steel and glass, tell me who lands first".
+  // Two named materials fall side by side (6 m lanes, no interaction); touchdown
+  // times rank the verdict. Needs two materials, else MIXED with the gap named.
+  if (/\bwho\s+(lands|hits|falls|reaches)\s+first\b|\bwhich\s+lands\s+first\b|\blanding\s+order\b|\btell\s+me\s+who\b/.test(p)) {
+    const order: { idx: number; id: string }[] = [];
+    for (const k of Object.keys(MATERIALS)) {
+      const nm = MATERIALS[k].name.toLowerCase();
+      let i = p.indexOf(k);
+      while (i !== -1) { order.push({ idx: i, id: k }); i = p.indexOf(k, i + 1); }
+      if (nm !== k) {
+        let j = p.indexOf(nm);
+        while (j !== -1) { order.push({ idx: j, id: k }); j = p.indexOf(nm, j + 1); }
+      }
+    }
+    order.sort((a, b) => a.idx - b.idx);
+    const ids: string[] = [];
+    for (const o of order) if (!ids.includes(o.id)) ids.push(o.id);
+    if (ids.length < 2) {
+      const r = fresh(input, envName);
+      reason(r, "MIXED", 0.4, "A race needs two named materials: 'drop steel and glass — who lands first'.");
+      return r;
+    }
+    const hM = p.match(/(\d+(?:\.\d+)?)\s?(km|m|ft)\b/);
+    const h = hM ? parseFloat(hM[1]) * (hM[2] === "km" ? 1000 : hM[2] === "ft" ? 0.3048 : 1) : 50;
+    return runScenario(input, {
+      env: planet.id, durationS: 12,
+      bodies: [
+        { shape: "box", material: ids[0], sizeM: 0.5, heightM: h, x: 0 },
+        { shape: "box", material: ids[1], sizeM: 0.5, heightM: h, x: 6 },
+      ],
+      checks: [
+        { kind: "survives-fall", heightM: h, body: 0 },
+        { kind: "survives-fall", heightM: h, body: 1 },
+        { kind: "lands-first" },
+      ],
+    });
+  }
+
   // 1. LIFT verdicts — human strength is bounded and well documented.
   const liftM = p.match(/lift|carry|hold|pick up/);
   const kgM = p.match(/(\d+(?:\.\d+)?)\s?kg/);
@@ -152,6 +216,24 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     if (typeof warmKJ === "number") unc(r, "warm1kgFrom20CkJ", warmKJ, UNCERTAINTY.meltEnergy.rel!, "c ±10%, Lf stacked");
     if (typeof meltKJ === "number") unc(r, "melt1kgFrom20CkJ", meltKJ, UNCERTAINTY.meltEnergy.rel!, "c ±10%, Lf stacked");
     if (typeof heatS === "number") unc(r, "timeToHeat1kgS", heatS, UNCERTAINTY.heatTime.rel!, "h ±50% dominates — order of magnitude, not a promise");
+    // Biot check: uniform body temperature is honest only while Bi ≤ 0.1.
+    // Thicker bodies and fiercer baths grow skin-to-core gradients the lumped
+    // model cannot see — flagged, never faked (no internal conduction in-engine).
+    {
+      const k = mat.thermalWmK;
+      if (k === undefined) {
+        reason(r, "REAL", 0.6, `No conductivity data for ${mat.name} — heating times assume a uniform body; internal gradients UNKNOWN.`);
+      } else {
+        const rad = Math.cbrt(3 / (4 * Math.PI * mat.density));
+        const Lc = rad / 3;
+        const hB = T >= 800 ? H_CONV.furnace.h : H_CONV.stillAir.h;
+        const Bi = (hB * Lc) / k;
+        r.measurements.biotNumber = +Bi.toFixed(3);
+        if (Bi > 0.1) {
+          reason(r, "REAL", 0.7, `Biot ≈ ${Bi.toFixed(2)} (> 0.1): the skin outruns the core — quoted times are lower bounds; thick ${mat.name} lags behind.`);
+        }
+      }
+    }
     unc(r, "tempC", T, 0, "exact input");
     if (mat.meltC !== undefined) unc(r, "meltC", mat.meltC, UNCERTAINTY.meltC.abs! / mat.meltC, "alloy shift ±15 K");
     if (T >= 800) {
@@ -414,9 +496,21 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
       vel: v0 ? { x: v0 * Math.cos((ang * Math.PI) / 180), y: v0 * Math.sin((ang * Math.PI) / 180), z: 0 } : undefined,
       dragProfile: "sphere",
     });
+    // Word-order throw target ("over the wall into the pool"): a static slab
+    // stands in the lane; clearance is measured live from the trajectory.
+    const wallM = p.match(/\bover\s+(?:the\s+)?(?:(\w+)\s+)?(wall|fence|barrier)\b/);
+    const wall = wallM ? w.spawn({ shape: "box", material: "concrete", sizeM: 1.5, pos: { x: 8, y: 1.5, z: 0 }, static: true }) : null;
+    let minClear = Infinity, entered = false;
     const n = Math.ceil(12 * 120);
     for (let i = 0; i < n; i++) {
       w.step(1 / 120);
+      if (wall && !b.broken) {
+        const halfX = wall.halfM?.x ?? 1.5;
+        if (Math.abs(b.pos.x - wall.pos.x) < halfX + b.radiusM) {
+          entered = true;
+          minClear = Math.min(minClear, b.pos.y - b.radiusM - (wall.pos.y + (wall.halfM?.y ?? 1.5)));
+        }
+      }
       if (i % 60 === 0) r.trace.push({ t: +w.time.toFixed(2), y: +b.pos.y.toFixed(2), v: +Math.hypot(b.vel.x, b.vel.y).toFixed(1), tempC: b.tempC, event: b.events[b.events.length - 1] });
       if (b.broken) break;
     }
@@ -454,6 +548,19 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
       cite(r, "nist");
     }
     r.events = b.events;
+    if (wall) {
+      if (!entered) {
+        r.measurements.wallClearM = "never reached";
+        reason(r, "NOT REAL", 0.85, `${mat.name} sphere never reached the wall — it fell short. No clearance, no pool.`);
+      } else if (minClear > 0) {
+        r.measurements.wallClearM = +minClear.toFixed(2);
+        unc(r, "wallClearM", minClear, UNCERTAINTY.range.rel!, "drag + Cd spread");
+        reason(r, "REAL", 0.88, `Clears the 3 m wall by ${minClear.toFixed(2)} m — the over-the-wall line holds.`);
+      } else {
+        r.measurements.wallClearM = +minClear.toFixed(2);
+        reason(r, "NOT REAL", 0.9, `Clips the wall (${minClear.toFixed(2)} m under the top) — it does NOT sail into the pool.`);
+      }
+    }
     if (b.broken) reason(r, "REAL", 0.9, `${velNote}It does NOT survive: ${b.events[b.events.length - 1]}`);
     else if (v0 && range < vacRange * 0.5) reason(r, "REAL", 0.85, `${velNote}Short of vacuum range (${vacRange.toFixed(0)} m → ${range.toFixed(0)} m): drag is eating it alive. Games that ignore this are NOT REAL.`);
     else reason(r, "REAL", 0.85, `${velNote}Lands ${range.toFixed(1)} m out, intact. Numbers above — check any game against them.`);
@@ -646,18 +753,43 @@ export function runScenario(prompt: string, s: ScenarioDesc): ExperienceResult {
   w.env.gravity = s.gravity ?? planet.gravity;
   if (s.ambientC !== undefined) w.env.ambientC = s.ambientC;
   if (s.airDensity !== undefined) w.env.airDensity = s.airDensity;
-  const bodies = (s.bodies ?? [{ shape: "box", material: "oak", sizeM: 1, heightM: 20 }]).map((d) =>
+  if (s.wind) w.env.wind = { x: s.wind[0], y: s.wind[1], z: s.wind[2] };
+  const descs = s.bodies ?? [{ shape: "box", material: "oak", sizeM: 1, heightM: 20 }];
+  const bodies = descs.map((d) =>
     w.spawn({
       shape: d.shape, material: d.material, sizeM: d.sizeM,
-      pos: { x: 0, y: d.heightM ?? 10, z: 0 }, vel: d.vel ? { x: d.vel[0], y: d.vel[1], z: d.vel[2] } : undefined,
+      pos: { x: d.x ?? 0, y: d.heightM ?? 10, z: 0 }, vel: d.vel ? { x: d.vel[0], y: d.vel[1], z: d.vel[2] } : undefined,
       tempC: d.tempC, dragProfile: d.dragProfile,
       ghost: d.ghost, massOverrideKg: d.massKg,
+      static: d.static, spin: d.spin ? { x: d.spin[0], y: d.spin[1], z: d.spin[2] } : undefined,
     }));
+  // Slosh tethers: ghost cargo cores pull on their shells (approx pendulum).
+  descs.forEach((d, bi) => {
+    if (d.cargoOf !== undefined && bodies[bi] && bodies[d.cargoOf]) {
+      w.tether(bodies[bi].id, bodies[d.cargoOf].id, d.fillFrac ?? 1);
+    }
+  });
   const n = Math.ceil((s.durationS ?? 8) * 120);
   r.traces = {};
   for (const bd of bodies) r.traces[bd.id] = [];
+  // Wall-clearance tracking ("over the wall"): closest approach while in the gate.
+  const wallTracks = (s.checks ?? []).filter((c) => c.kind === "clears-wall").map((c) => {
+    const wall = c.kind === "clears-wall" ? bodies[c.wall ?? bodies.length - 1] : undefined;
+    const racer = c.kind === "clears-wall" ? bodies[c.body ?? 0] : undefined;
+    return { wall, racer, minClear: Infinity, entered: false };
+  });
   for (let i = 0; i < n; i++) {
     w.step(1 / 120);
+    for (const t of wallTracks) {
+      if (!t.wall || !t.racer || t.racer.broken) continue;
+      const halfX = t.wall.shape === "box" ? (t.wall.halfM?.x ?? 1) : t.wall.radiusM;
+      const r0 = t.racer.shape === "sphere" ? t.racer.radiusM : (t.racer.halfM?.y ?? 0.5);
+      const top = t.wall.pos.y + (t.wall.shape === "box" ? (t.wall.halfM?.y ?? 1) : t.wall.radiusM);
+      if (Math.abs(t.racer.pos.x - t.wall.pos.x) < halfX + r0) {
+        t.entered = true;
+        t.minClear = Math.min(t.minClear, t.racer.pos.y - r0 - top);
+      }
+    }
     if (i % 120 === 0) {
       for (const bd of bodies) {
         r.traces[bd.id].push({ t: +w.time.toFixed(1), y: +bd.pos.y.toFixed(2), v: +Math.hypot(bd.vel.x, bd.vel.y, bd.vel.z).toFixed(1), tempC: +bd.tempC.toFixed(1) });
@@ -716,6 +848,57 @@ export function runScenario(prompt: string, s: ScenarioDesc): ExperienceResult {
       const d = soundDelay(c.distM, c.mediumMs ?? PHYSICS.SOUND_AIR);
       r.measurements.soundDelayS = +d.toFixed(2);
       reason(r, "REAL", 0.95, `Heard ${d.toFixed(1)} s after seen at ${c.distM} m.`);
+    } else if (c.kind === "lands-first") {
+      // Landing-order race: rank non-static, non-cargo bodies by touchdown.
+      const racers = bodies
+        .map((bd, i) => ({ bd, i }))
+        .filter(({ bd }) => !bd.isStatic && !bd.ghost);
+      const timed = racers.map(({ bd, i }) => ({
+        name: `${bd.material.name} ${bd.shape}`, t: bd.landedT, broken: bd.broken, i,
+      }));
+      timed.sort((a, b) => (a.t ?? Infinity) - (b.t ?? Infinity));
+      r.measurements.landingOrder = timed.map((t) => ({
+        body: t.name, touchdownS: t.t !== null ? +t.t.toFixed(2) : "airborne", broken: t.broken,
+      }));
+      cite(r, "isa");
+      if (!timed.length) {
+        reason(r, "MIXED", 0.4, "No racers staged — name two materials to race.");
+      } else {
+        const line = timed.map((t, k) =>
+          `${k + 1}. ${t.name} (${t.t !== null ? `${t.t.toFixed(2)} s` : "still airborne"})`).join(" · ");
+        const winner = timed[0];
+        const close = timed.length > 1 && timed[1].t !== null && winner.t !== null
+          && Math.abs(timed[1].t - winner.t) < 0.05;
+        reason(r, "REAL", 0.9, `Touchdown order: ${line}.${close ? " Dead heat inside 0.05 s — drag, not destiny, decides the rerun." : ` ${winner.name} lands first.`}`);
+      }
+    } else if (c.kind === "clears-wall") {
+      const t = wallTracks[0];
+      const bb2 = bodies[c.body ?? 0] ?? bodies[0];
+      if (!t || !t.wall) {
+        reason(r, "MIXED", 0.4, "Wall was never staged — clearance UNKNOWN.");
+      } else if (!t.entered) {
+        reason(r, "NOT REAL", 0.85, `${bb2.material.name} ${bb2.shape} never reached the wall — it fell short. No clearance, no pool.`);
+        r.measurements.wallClearM = "never reached";
+      } else if (t.minClear > 0) {
+        r.measurements.wallClearM = +t.minClear.toFixed(2);
+        unc(r, "wallClearM", t.minClear, UNCERTAINTY.range.rel!, "drag + Cd spread");
+        reason(r, "REAL", 0.88, `${bb2.material.name} ${bb2.shape} clears the ${t.wall.pos.y * 2} m wall by ${t.minClear.toFixed(2)} m — over the wall, into the pool line holds.`);
+      } else {
+        r.measurements.wallClearM = +t.minClear.toFixed(2);
+        reason(r, "NOT REAL", 0.9, `${bb2.material.name} ${bb2.shape} clips the wall (${t.minClear.toFixed(2)} m under the top) — it does NOT sail into the pool.`);
+      }
+    }
+  }
+  // Conditional branch: the condition ran first; narrate the taken branch.
+  if (s.branch) {
+    const ifB = bodies[s.branch.ifBody], thenB = bodies[s.branch.thenBody];
+    if (ifB && thenB) {
+      r.measurements.conditionMet = ifB.broken;
+      if (ifB.broken) {
+        reason(r, "REAL", 0.9, `IF TRUE: ${ifB.material.name} ${ifB.shape} shattered (${ifB.events[ifB.events.length - 1] ?? "impact failure"}) — so the consequent is live: ${thenB.material.name} ${thenB.shape} ${thenB.broken ? "also breaks" : "holds"} on its own fall.`);
+      } else {
+        reason(r, "REAL", 0.85, `IF FALSE: ${ifB.material.name} ${ifB.shape} held — the consequent (${thenB.material.name} ${thenB.shape}) never triggers; its staged fall is judged as its own setup ${thenB.broken ? "and it would break too" : "and it holds"}.`);
+      }
     }
   }
   if (!(s.checks ?? []).length) {
