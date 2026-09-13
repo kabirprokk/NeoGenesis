@@ -44,14 +44,18 @@ export function lightDelay(distM: number, c = PHYSICS.C): number {
   return Math.max(0, distM) / c;
 }
 /** Direct-sun illuminance (lux) from solar altitude: Beer–Lambert extinction
- * through relative airmass m ≈ 1/sin(alt), broadband optical depth ≈ 0.32
- * (clear sea-level air, approx). Noon ≈ 90 klux, 10° ≈ 20 klux, horizon ≈
- * tens of lux; below the horizon an exponential twilight falloff to ~0. */
+ * of the beam through Kasten–Young airmass (saturates ≈ 39 at the horizon —
+ * Earth curvature, not a flat slab) plus an approx skylight floor. Noon ≈
+ * 100 klux, 10° ≈ 20 klux, 1° ≈ 140 lux; below the horizon an exponential
+ * twilight falloff to ~0. Broadband fit, quoted ±20%. */
 export function solarIlluminanceLux(altDeg: number): number {
   if (altDeg <= -18) return 0;
-  if (altDeg < 0) return 400 * Math.pow(10, altDeg / 8);
-  const m = 1 / Math.sin(Math.max(1, altDeg) * Math.PI / 180);
-  return 128000 * Math.exp(-0.32 * m);
+  if (altDeg < 0) return 300 * Math.pow(10, altDeg / 5);
+  const sinA = Math.sin(Math.max(0, altDeg) * Math.PI / 180);
+  const m = 1 / (sinA + 0.50572 * Math.pow(altDeg + 6.07995, -1.6364));
+  const beam = 128000 * Math.exp(-0.32 * m);
+  const sky = 15000 * Math.pow(sinA, 1.2);
+  return beam + sky;
 }
 /** Sun color temperature (K) from altitude: blue-white noon → ember horizon
  * (approx — real CCT also swings with aerosols, quoted ±500 K). */

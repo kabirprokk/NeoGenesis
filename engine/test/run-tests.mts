@@ -569,3 +569,27 @@ console.log(`\nALL ${pass} CHECKS PASSED (incl. slosh)`);
   ok(se.ok && (se.result as { env: { wind: { x: number } } }).env.wind.x === 10, "wind tool stages air");
 }
 console.log(`\nALL ${pass} CHECKS PASSED (incl. wind-spin-ccd)`);
+// Light at c + sun/moon from real formulas (rendering consumes these numbers).
+{
+  ok(Math.abs(lightDelay(299792458) - 1) < 1e-9, "light crosses 1 light-second in 1 s", lightDelay(299792458));
+  ok(Math.abs(lightDelay(1000) * 1e6 - 3.3356) < 0.01, "1 km flash = 3.34 µs", lightDelay(1000) * 1e6);
+  const noon = solarIlluminanceLux(60);
+  ok(noon > 50000 && noon < 120000, "noon sun ≈90 klux", noon.toFixed(0));
+  ok(solarIlluminanceLux(1) < 5000 && solarIlluminanceLux(1) > 1, "horizon sun dimmed by airmass", solarIlluminanceLux(1).toFixed(1));
+  ok(solarIlluminanceLux(-15) < 1, "astronomical night ≈ 0 lux", solarIlluminanceLux(-15));
+  ok(Math.abs(sunColorTempK(60) - 5530) < 300 && sunColorTempK(1) < 2600, "noon white, horizon ember", sunColorTempK(60).toFixed(0));
+  const [wr, wg, wb] = kelvinToRGBapprox(5600);
+  ok(Math.abs(wr - wg) < 0.1 && Math.abs(wg - wb) < 0.15, "5600 K near-white", [wr, wg, wb].map((v) => v.toFixed(2)).join("/"));
+  const [er, , eb] = kelvinToRGBapprox(2000);
+  ok(er > 0.9 && eb < 0.4, "2000 K ember-red", [er, eb].map((v) => v.toFixed(2)).join("/"));
+  const full = moonIlluminanceLux(1, 60);
+  ok(full > 0.05 && full < 0.4, "full-moon zenith ≈0.25 lux", full.toFixed(3));
+  ok(moonIlluminanceLux(0, 60) === 0 && moonIlluminanceLux(1, -10) === 0, "new/set moon gives no light");
+  const h = experience("hear a blast from 2km");
+  ok(typeof h.measurements.lightDelayS === "number" && h.reasons.join().includes("µs"), "blast verdict quotes light-time", JSON.stringify(h.measurements.lightDelayS));
+  const ld = runTool("light-delay", { distM: 4000 });
+  ok(ld.ok && Math.abs((ld.result as { microS: number }).microS - 13.34) < 0.01, "4 km plane = 13.3 µs crossing", JSON.stringify(ld.result));
+  const sl = runTool("sunlight", { altDeg: 60 });
+  ok(sl.ok && (sl.result as { lux: number }).lux > 50000, "sunlight tool", JSON.stringify(sl.result));
+}
+console.log(`\nALL ${pass} CHECKS PASSED (incl. light)`);
