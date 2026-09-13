@@ -8,7 +8,7 @@ import { EngineWorld } from "./world.js";
 import { getModel, spawnModel, MODEL_COUNT, MODEL_CLASSES } from "./models.js";
 import { experience, runScenario, verdictCSV } from "./experience.js";
 import { neoParse, neoScenario, neoSamples, neoPatternCount, neoToolFor } from "./neo.js";
-import { terminalVelocity, projectileRange, impact, buoyancyVerdict, soundDelay, slidesOnIncline, reposeOk, heatEnergyJ, heatTimeS, lorentz, relKineticJ, orbitVelocity, escapeVelocity, orbitPeriodS, horizonM, soundSpeed, gravityAt, blackbodyFlux } from "./physics.js";
+import { terminalVelocity, projectileRange, impact, buoyancyVerdict, soundDelay, lightDelay, solarIlluminanceLux, sunColorTempK, kelvinToRGBapprox, slidesOnIncline, reposeOk, heatEnergyJ, heatTimeS, lorentz, relKineticJ, orbitVelocity, escapeVelocity, orbitPeriodS, horizonM, soundSpeed, gravityAt, blackbodyFlux } from "./physics.js";
 import { SPECIFIC_HEAT, UNCERTAINTY, H_CONV, CITATIONS, EMISSIVITY } from "./science.js";
 import { CODEX_VERSION } from "./constants.js";
 
@@ -79,6 +79,14 @@ export const TOOLS: ToolDef[] = [
     (a) => ({ verdict: buoyancyVerdict(num(a, "bodyDensity"), FLUIDS[str(a, "fluid")]?.density, "body", str(a, "fluid")) })),
   def("sound-delay", "Seconds until heard at distance.", T(["distM"], [["distM", "number", "meters"], ["mediumMs", "number", "default 343"]]),
     (a) => ({ seconds: soundDelay(num(a, "distM"), num(a, "mediumMs", 343)) })),
+  def("light-delay", "Seconds until SEEN at distance (d/c — microseconds at lab scale).", T(["distM"], [["distM", "number", "meters"]]),
+    (a) => ({ seconds: lightDelay(num(a, "distM")), microS: +(lightDelay(num(a, "distM")) * 1e6).toFixed(2) })),
+  def("sunlight", "Direct-sun illuminance (lux) + color temperature (K) from solar altitude.", T(["altDeg"], [["altDeg", "number", "sun altitude degrees"]]),
+    (a) => {
+      const alt = num(a, "altDeg", 45);
+      const lux = solarIlluminanceLux(alt), T = sunColorTempK(alt);
+      return { altitudeDeg: alt, lux: +lux.toFixed(1), colorTempK: Math.round(T), rgb: kelvinToRGBapprox(T).map((v) => +v.toFixed(3)) };
+    }),
   def("slide-check", "Whether μs holds on an incline.", T(["muS", "angleDeg"], [["muS", "number", "static friction"], ["angleDeg", "number", "degrees"]]),
     (a) => ({ slides: slidesOnIncline(num(a, "muS"), num(a, "angleDeg")) })),
   def("repose-check", "Granular stability verdict.", T(["material", "angleDeg"], [["material", "string", "drySand|soil|gravel|…"], ["angleDeg", "number", "degrees"]]),

@@ -907,7 +907,7 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
   else if (/\bcurveball\b|\bsidespin\b|\bside\s+spin\b|\bcurving\b/.test(raw)) spin = [0, 60, 0];
   const raceOrder = (action === "drop" || action === "throw" || /\brace\b|\bwho\b.*\bfirst\b|\blanding order\b/.test(raw))
     && /\bwho\s+(lands|hits|falls|reaches)\s+first\b|\bwhich\s+lands\s+first\b|\blanding\s+order\b|\brace\b|\btell\s+me\s+who\b|\bwho\s+wins\b/.test(raw);
-  const materialExplicit = !!matHit;
+  const materialExplicit = !!matHit && !shellDefaulted;
   const shapeExplicit = !!shapeHit;
   const planetExplicit = planet !== "earth" || /\bearth\b/.test(raw);
   const velExplicit = !!velNumHit || phraseVelMs !== null;
@@ -988,7 +988,7 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
     : target.kind === "fluid"
     ? `${FLUIDS[target.fluid!].name} pool → splash → ${mat.density < (FLUIDS[target.fluid!].density ?? 1e9) ? "float" : "sink"}`
     : "solid ground → impact vs strength";
-  const toStr = (obstacle ? `over the ${obstacle.word} (${obstacle.heightM} m) → ` : "")
+  const toStr = (obstacle ? `${obstacle.word} (${obstacle.heightM} m) → ` : "")
     + toStrBase
     + (raceOrder ? " → ranked by touchdown" : "")
     + (fillFrac !== null && containedFluid && fillFrac < 1 ? ` (${Math.round(fillFrac * 100)}% full)` : "");
@@ -1105,7 +1105,7 @@ export function neoPatternCount(): { total: number; breakdown: Record<string, nu
   const velPhrases = 22; // lightspeed, mach, supersonic… + 13 velocity units
   const targets = 1 + Object.keys(FLUIDS).length + Object.keys(FLUID_ALIAS).length + GROUND_WORDS.length;
   const planets = Object.keys(PLANETS).length;
-  const forms = 4; // statement, question, versus, capacity-report
+  const forms = 7; // statement, question, versus, capacity-report, conditional, race, follow-up
   const bodies = 3; // single + multi-body crowds (1–3 extra bodies)
   const breakdown = { verbs, shapes, materials, sizeU, heightU, velPhrases, targets, planets, forms, bodies };
   const total = verbs * shapes * materials * sizeU * heightU * velPhrases * targets * planets * forms * bodies;

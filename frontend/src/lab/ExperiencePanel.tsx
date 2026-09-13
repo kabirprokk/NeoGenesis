@@ -14,6 +14,9 @@ const PRESETS = [
   "float oak in honey",
   "drop a silver ball from a tower on Mars",
   "drop a steel and a glass box from 50m",
+  "drop steel and glass from 50m, tell me who lands first",
+  "if the glass breaks, drop steel",
+  "throw a steel ball at 30 m/s over the wall into the pool",
 ];
 
 function Badge({ v }: { v: NeoRunResult["verdict"]["verdict"] }) {

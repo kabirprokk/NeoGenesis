@@ -95,6 +95,9 @@ export function stageNeo(world: EngineWorld, plan: NeoPlan, ax: number, az: numb
   if (plan.condIf && plan.condThen) {
     lines.push("branch: the second setup drops only if the first breaks — verdict simmed the condition first");
   }
+  if (plan.raceOrder) {
+    lines.push("race: every body timed to touchdown — verdict ranks the landing order");
+  }
   // Obstacle wall ("over the wall"): a static slab standing in the flight
   // lane. The verdict measures clearance; the live wall collides honestly.
   if (plan.obstacle && !(plan.condIf && plan.condThen)) {
@@ -129,6 +132,12 @@ export function stageNeo(world: EngineWorld, plan: NeoPlan, ax: number, az: numb
         const vStr = v0 >= 1000000 ? `${(v0 / 1000000).toFixed(1)}M m/s` : v0 >= 10000 ? `${(v0 / 1000).toFixed(1)}k m/s` : `${+v0.toFixed(1)} m/s`;
         lines.push(`${tag}${pmat.name} ${p.shape} (${b.massKg.toFixed(0)} kg) thrown ${vStr} @ ${ang}° from ${ptrueH} m`);
         if (ptrueV > 400) lines.push("streaking too fast to track — watch the verdict trace for the real numbers");
+        if (p.spin && (p.spin[0] || p.spin[1] || p.spin[2])) {
+          lines.push("spinning — Magnus curve live (approx lift; no tumble yet)");
+        }
+        if (p.obstacle) {
+          lines.push(`must clear the ${p.obstacle.heightM} m ${p.obstacle.word} mid-flight — verdict measures the gap`);
+        }
         if (p.target.kind === "fluid" && (FLUIDS[p.target.fluid!]?.tempC ?? 0) >= 500) {
           lines.push(`${FLUIDS[p.target.fluid!].name} runs ~${FLUIDS[p.target.fluid!].tempC}°C — it will MELT/BURN on contact, not just splash. Watch the live log.`);
         }

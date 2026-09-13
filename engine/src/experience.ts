@@ -16,7 +16,7 @@ import { PLANETS } from "./planets.js";
 import { EngineWorld } from "./world.js";
 import {
   terminalVelocity, humanTerminal, projectileRange,
-  mohsVerdict, buoyancyVerdict, soundDelay, slidesOnIncline,
+  mohsVerdict, buoyancyVerdict, soundDelay, lightDelay, slidesOnIncline,
   electroVerdict, corrosionVerdict, snellBend, rollingStop, doseAt, toxicityTier, fallSurvival,
   heatEnergyJ, meltEnergyKJ, heatTimeS, lorentz, relKineticJ,
   orbitVelocity, escapeVelocity, orbitPeriodS, horizonM,
@@ -426,10 +426,13 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const distM = kmM ? parseFloat(kmM[1]) * 1000 : mM ? parseFloat(mM[1]) : 1000;
     const cAir = planet.tempC !== null ? soundSpeed(planet.tempC) : PHYSICS.SOUND_AIR;
     const delay = soundDelay(distM, cAir);
-    r.measurements = { distM, soundDelayS: +delay.toFixed(2), soundSpeedMs: +cAir.toFixed(1) };
+    const lightS = lightDelay(distM);
+    r.measurements = { distM, soundDelayS: +delay.toFixed(2), soundSpeedMs: +cAir.toFixed(1), lightDelayS: lightS };
     cite(r, "nist");
     unc(r, "soundDelayS", delay, UNCERTAINTY.soundDelay.rel!, "air temperature ±10°C");
+    unc(r, "lightDelayS", lightS, 0, "c exact — distance is the only input");
     reason(r, "REAL", 0.95, `At ${distM} m you see the flash first and hear it ${delay.toFixed(1)} s later (sound ${cAir.toFixed(0)} m/s at ${planet.tempC ?? 20}°C — c grows with √T).`);
+    reason(r, "REAL", 0.9, `The flash itself crossed those ${distM} m in ${(lightS * 1e6).toFixed(1)} µs at light speed — effectively instant at lab scale, which is why the game renders flashes immediately.`);
     if (planet.pressureAtm !== null && planet.pressureAtm < 0.05) {
       reason(r, "MIXED", 0.6, `Composition gap: this uses dry-AIR sound; ${planet.name}'s thin CO₂ air carries sound near ~227 m/s at these temperatures — treat the delay as order-of-magnitude there.`);
     }

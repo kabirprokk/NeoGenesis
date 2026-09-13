@@ -103,6 +103,9 @@ export function execCommand(raw: string, g: GameCtx): string[] {
 
   if (h === "help") return [
     "commands: do <experiment> (STAGE it live) | verdict <prompt> | ai <question> |",
+    "neo understands follow-ups: `again, but on Mars` · `make it heavier` ·",
+    "`twice as big` · `no, I meant steel` · `if the glass breaks, drop steel` ·",
+    "`who lands first` · `over the wall` · `half-full` · `with backspin` |",
     "spawn-body <mat> <size> [height] | cannon <mat> [speed] | rain <mat> [n] |",
     "fireworks | volcano | duel <matA> <matB> | bodies | sim <s> | events | watch |",
     "gravity <planet|value> | ambient <C> | planet <id> | teleport <x> <z> | time <h> |",

@@ -38,6 +38,45 @@ export function buoyancyVerdict(bodyDensity: number, fluidDensity: number | unde
 }
 /** Sound travel delay. Table 6. */
 export function soundDelay(distM: number, mediumMs: number): number { return distM / mediumMs; }
+/** Light travel delay (s): d/c. At lab scales this is microseconds — the flash
+ * is effectively instant and the verdicts say so with the number attached. */
+export function lightDelay(distM: number, c = PHYSICS.C): number {
+  return Math.max(0, distM) / c;
+}
+/** Direct-sun illuminance (lux) from solar altitude: Beer–Lambert extinction
+ * through relative airmass m ≈ 1/sin(alt), broadband optical depth ≈ 0.32
+ * (clear sea-level air, approx). Noon ≈ 90 klux, 10° ≈ 20 klux, horizon ≈
+ * tens of lux; below the horizon an exponential twilight falloff to ~0. */
+export function solarIlluminanceLux(altDeg: number): number {
+  if (altDeg <= -18) return 0;
+  if (altDeg < 0) return 400 * Math.pow(10, altDeg / 8);
+  const m = 1 / Math.sin(Math.max(1, altDeg) * Math.PI / 180);
+  return 128000 * Math.exp(-0.32 * m);
+}
+/** Sun color temperature (K) from altitude: blue-white noon → ember horizon
+ * (approx — real CCT also swings with aerosols, quoted ±500 K). */
+export function sunColorTempK(altDeg: number): number {
+  const s = Math.max(0, Math.sin(Math.max(0, altDeg) * Math.PI / 180));
+  return 1800 + 4000 * Math.sqrt(s);
+}
+/** Correlated-color-temperature → sRGB 0..1 (Tanner Helland approx, ±labeled).
+ * 1000–4000 K ember→warm, 5600 K near-white, 10000 K+ blue. */
+export function kelvinToRGBapprox(tK: number): [number, number, number] {
+  const t = Math.min(12000, Math.max(1000, tK)) / 100;
+  let r: number, g: number, b: number;
+  r = t <= 66 ? 255 : 329.698727446 * Math.pow(t - 60, -0.1332047592);
+  g = t <= 66 ? 99.4708025861 * Math.log(t) - 161.1195681661
+    : 288.1221695283 * Math.pow(t - 60, -0.0755148492);
+  b = t >= 66 ? 255 : t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+  const cl = (v: number): number => Math.min(1, Math.max(0, v / 255));
+  return [cl(r), cl(g), cl(b)];
+}
+/** Moonlight illuminance (lux): full-moon zenith ≈ 0.25 lux, scaled by phase
+ * illumination and altitude (approx — libration and soil albedo ignored). */
+export function moonIlluminanceLux(illum01: number, altDeg: number): number {
+  const s = Math.max(0, Math.sin(Math.max(0, altDeg) * Math.PI / 180));
+  return 0.25 * Math.min(1, Math.max(0, illum01)) * Math.pow(s, 0.75);
+}
 /** Block on incline: slides if tan(angle) > muS. */
 export function slidesOnIncline(muS: number, angleDeg: number): boolean {
   return Math.tan((angleDeg * Math.PI) / 180) > muS;

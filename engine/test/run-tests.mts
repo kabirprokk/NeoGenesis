@@ -2,7 +2,7 @@
 import { PHYSICS } from "../src/constants.js";
 import { MATERIALS, FLUIDS, EXPLOSIVES, explosiveClass, FRICTION_PAIRS, REPOSE_DEG } from "../src/materials.js";
 import { PLANETS } from "../src/planets.js";
-import { humanTerminal, projectileRange, mohsVerdict, buoyancyVerdict, soundDelay, slidesOnIncline, reposeOk, heatEnergyJ, meltEnergyKJ, heatTimeS, lorentz, relKineticJ, orbitVelocity, escapeVelocity, orbitPeriodS, horizonM, soundSpeed, gravityAt, blackbodyFlux, machCdFactor, magnusCl, biotNumber } from "../src/physics.js";
+import { humanTerminal, projectileRange, mohsVerdict, buoyancyVerdict, soundDelay, lightDelay, solarIlluminanceLux, sunColorTempK, kelvinToRGBapprox, moonIlluminanceLux, slidesOnIncline, reposeOk, heatEnergyJ, meltEnergyKJ, heatTimeS, lorentz, relKineticJ, orbitVelocity, escapeVelocity, orbitPeriodS, horizonM, soundSpeed, gravityAt, blackbodyFlux, machCdFactor, magnusCl, biotNumber } from "../src/physics.js";
 import { EngineWorld } from "../src/world.js";
 import { getModel, MODEL_COUNT, spawnModel } from "../src/models.js";
 import { experience, runScenario } from "../src/experience.js";
