@@ -122,11 +122,13 @@ export function stageNeo(world: EngineWorld, plan: NeoPlan, ax: number, az: numb
         }
         if (p.containedFluid) {
           const coreMat = MATERIALS[p.containedFluid] ? p.containedFluid : "water";
-          spawnBody({ shape: p.shape, material: coreMat, sizeM: psize,
+          // Core rides 4% smaller so it reads through the shell (no z-fighting),
+          // same mass so ballistics match and they fly as one.
+          spawnBody({ shape: p.shape, material: coreMat, sizeM: psize * 0.96,
             pos: { x: X - backoff, y: surfaceY + pH, z: az }, vel: { x: vx0, y: vy0, z: 0 },
             dragProfile: p.shape === "sphere" ? "sphere" : "cube",
-            ghost: true, massOverrideKg: b.massKg });
-          lines.push(`${tag}${FLUIDS[p.containedFluid].name} sealed inside — ghost core flies with the shell, splashes apart on impact`);
+            massOverrideKg: b.massKg });
+          lines.push(`${tag}${FLUIDS[p.containedFluid].name} sealed inside — visible core flies with the shell, splashes apart on impact`);
         }
         break;
       }
@@ -255,9 +257,9 @@ export function stageNeo(world: EngineWorld, plan: NeoPlan, ax: number, az: numb
         lines.push(`${tag}${pmat.name} ${p.shape} (${b.massKg.toFixed(0)} kg) released from ${ptrueH} m`);
         if (p.containedFluid) {
           const coreMat = MATERIALS[p.containedFluid] ? p.containedFluid : "water";
-          spawnBody({ shape: p.shape, material: coreMat, sizeM: psize,
-            pos: { x: X, y: surfaceY + pH, z: az }, ghost: true, massOverrideKg: b.massKg });
-          lines.push(`${tag}${FLUIDS[p.containedFluid].name} sealed inside — ghost core rides along, splashes apart on impact`);
+          spawnBody({ shape: p.shape, material: coreMat, sizeM: psize * 0.96,
+            pos: { x: X, y: surfaceY + pH, z: az }, massOverrideKg: b.massKg });
+          lines.push(`${tag}${FLUIDS[p.containedFluid].name} sealed inside — visible core rides along, splashes apart on impact`);
         }
         if (p.target.kind === "fluid" && p.target.fluid) {
           const f = FLUIDS[p.target.fluid];
