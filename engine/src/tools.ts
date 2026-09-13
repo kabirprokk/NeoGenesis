@@ -7,6 +7,7 @@ import { PLANETS } from "./planets.js";
 import { EngineWorld } from "./world.js";
 import { getModel, spawnModel, MODEL_COUNT, MODEL_CLASSES } from "./models.js";
 import { experience, runScenario } from "./experience.js";
+import { neoParse, neoScenario, neoSamples, neoPatternCount, neoToolFor } from "./neo.js";
 import { terminalVelocity, projectileRange, impact, buoyancyVerdict, soundDelay, slidesOnIncline, reposeOk } from "./physics.js";
 
 export type Args = Record<string, string | number | boolean>;
@@ -122,6 +123,13 @@ export const TOOLS: ToolDef[] = [
     (a) => runScenario("tool-scenario", JSON.parse(str(a, "json")) as Parameters<typeof runScenario>[1])),
   def("batch", "Verdicts for many prompts, one line each.", T(["prompts"], [["prompts", "string", "prompts separated by |"]]),
     (a) => str(a, "prompts").split("|").map((p) => { const r = experience(p.trim()); return { prompt: p.trim(), verdict: r.verdict, confidence: r.confidence, reasons: r.reasons.slice(0, 2) }; })),
+  // ---- neo (in-world AI: parse → plan → stage → judge, no AI API) ----
+  def("neo-parse", "Neo parses a sentence into WHAT/OBJECT/FROM/TO plan + tool choice.", T(["prompt"], [["prompt", "string", "natural-language experiment"]]),
+    (a) => { const plan = neoParse(str(a, "prompt")); const t = neoToolFor(plan); return { ...plan, tool: t.tool, toolWhy: t.why }; }),
+  def("neo-scenario", "Neo parses a sentence and returns the deterministic scenario JSON it would stage.", T(["prompt"], [["prompt", "string", "natural-language experiment"]]),
+    (a) => { const plan = neoParse(str(a, "prompt")); return { plan, scenario: neoScenario(plan) }; }),
+  def("neo-samples", "Deterministic sample sentences from Neo's grammar (seeded).", T([], [["seed", "number", "default 7"], ["n", "number", "default 10"]]),
+    (a) => ({ patterns: neoPatternCount(), samples: neoSamples(num(a, "seed", 7), Math.min(50, Math.max(1, num(a, "n", 10)))) })),
 ];
 
 export function runTool(name: string, args: Args = {}, ctx: ToolCtx = {}): { ok: boolean; result: unknown } {

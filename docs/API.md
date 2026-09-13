@@ -1,16 +1,13 @@
-# API
+# API — browser-local web storage (no server)
 
-Base: `http://localhost:3001`. All player-scoped by `playerId` (`last-human` default).
-No NPC endpoints exist by design (ONE HUMAN rule).
+All player-scoped by `playerId` (`last-human` default). Implemented in
+`frontend/src/api/client.ts` on top of localStorage. No NPC endpoints exist
+by design (ONE HUMAN rule).
 
-| Method | Route | Purpose |
+| Function | Key | Purpose |
 |---|---|---|
-| GET | `/api/health` | liveness |
-| GET/POST | `/api/saves/:playerId`, `/api/saves` | save/load player (location, vitals, inventory, era, time) |
-| GET/POST | `/api/journal/:playerId`, `/api/journal` | Field Journal entries |
-| POST | `/api/discoveries` | caves/peaks/fossils/rivers/valleys/territories/phenomena |
-| GET | `/api/species` | species defs + food web string |
-| POST | `/api/eco/tick` | regional cohort tick `{dtDays, carryingCapacity, cohorts}` |
-| WS | `/ws` | per-player channel; `eco-delta` relay via Redis `player:{id}` |
+| `loadSave(playerId)` / `storeSave(save)` | `neo-save-{playerId}` | save/load player (location, vitals, inventory, era, time) |
+| `loadJournal(playerId)` / `addJournal(entry)` | `neo-journal-{playerId}` | Field Journal entries (last 100 kept) |
 
-Offline: backend falls back to memory; frontend falls back to localStorage. Nothing breaks.
+Ecology cohorts tick in-page via `shared/src/ecology.ts` (`tickCohorts`).
+Species defs come from `shared/src/ecology.ts` (`SPECIES`, `FOOD_WEB`).

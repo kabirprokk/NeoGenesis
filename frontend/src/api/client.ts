@@ -1,21 +1,40 @@
-const BASE = "";
-export async function loadSave(playerId: string) {
+// NeoGenesis web storage — fully browser-local. No server, no Docker.
+// Saves + journal live in localStorage, keyed by playerId.
+const saveKey = (playerId: string) => `neo-save-${playerId}`;
+const journalKey = (playerId: string) => `neo-journal-${playerId}`;
+
+function readJson<T>(key: string): T | null {
   try {
-    const r = await fetch(`${BASE}/api/saves/${playerId}`);
-    if (!r.ok) return null;
-    return await r.json();
-  } catch { return JSON.parse(localStorage.getItem(`neo-save-${playerId}`) ?? "null"); }
-}
-export async function storeSave(save: Record<string, unknown>) {
-  try {
-    const r = await fetch(`${BASE}/api/saves`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(save) });
-    if (!r.ok) throw new Error("api");
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : null;
   } catch {
-    localStorage.setItem(`neo-save-${(save as { playerId: string }).playerId}`, JSON.stringify(save));
+    return null;
   }
 }
-export async function addJournal(entry: Record<string, unknown>) {
+
+function writeJson(key: string, value: unknown): void {
   try {
-    await fetch(`${BASE}/api/journal`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(entry) });
-  } catch { /* offline — kept in-memory */ }
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // storage full or unavailable (private mode) — game keeps running in-memory
+  }
+}
+
+export async function loadSave(playerId: string): Promise<Record<string, any> | null> {
+  return readJson<Record<string, any>>(saveKey(playerId));
+}
+
+export async function storeSave(save: Record<string, unknown>) {
+  writeJson(saveKey(String((save as { playerId: string }).playerId)), save);
+}
+
+export async function loadJournal(playerId: string) {
+  return readJson<Record<string, unknown>[]>(journalKey(playerId)) ?? [];
+}
+
+export async function addJournal(entry: Record<string, unknown>) {
+  const pid = String((entry as { playerId: string }).playerId ?? "last-human");
+  const list = readJson<Record<string, unknown>[]>(journalKey(pid)) ?? [];
+  list.push({ ...entry, createdAt: new Date().toISOString() });
+  writeJson(journalKey(pid), list.slice(-100));
 }

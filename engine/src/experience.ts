@@ -17,7 +17,9 @@ import { EngineWorld } from "./world.js";
 import {
   terminalVelocity, humanTerminal, projectileRange, impact,
   mohsVerdict, buoyancyVerdict, soundDelay, slidesOnIncline, reposeOk, dragCd,
+  electroVerdict, corrosionVerdict, snellBend, rollingStop, doseAt, toxicityTier, fallSurvival,
 } from "./physics.js";
+import { ELECTRICAL, ACIDS, CORROSION_MIN, IMMUNE_MIN, OPTICS, ROLLING, ISOTOPES, GASTOX, HUMAN, FALL_ODDS, altitudeDensity } from "./science.js";
 
 export type Verdict = "REAL" | "NOT REAL" | "MIXED";
 export interface TraceSample { t: number; y: number; v: number; tempC: number; event?: string }
@@ -77,10 +79,11 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const kg = parseFloat(kgM[1]);
     const r = fresh(input, envName);
     const gL = planet.gravity / PHYSICS.G_EARTH;
-    r.measurements = { massKg: kg, weightN: +(kg * planet.gravity).toFixed(1), earthEquivalentKg: +(kg * gL).toFixed(1) };
-    if (kg * gL > 250) reason(r, "NOT REAL", 0.95, `No human lifts ${kg} kg at ${planet.gravity} m/s² (${(kg * planet.gravity / 1000).toFixed(1)} kN). Elite deadlift ≈ 250 kg on Earth.`);
-    else if (kg * gL > 100) reason(r, "MIXED", 0.7, `Only elite strength athletes move ${kg} kg-equivalent. Ordinary human: NOT REAL.`);
-    else reason(r, "REAL", 0.9, `${kg} kg is within trained human capacity (force ${(kg * planet.gravity).toFixed(0)} N).`);
+    r.measurements = { massKg: kg, weightN: +(kg * planet.gravity).toFixed(1), earthEquivalentKg: +(kg * gL).toFixed(1), deadliftLimitKg: HUMAN.deadliftKg.value, carryComfortKg: HUMAN.carryKg.value };
+    if (kg * gL > HUMAN.deadliftKg.value) reason(r, "NOT REAL", 0.97, `No human lifts ${kg} kg at ${planet.gravity} m/s² — absolute spinal-failure limit is ${HUMAN.deadliftKg.value} kg on Earth.`);
+    else if (kg * gL > 250) reason(r, "MIXED", 0.75, `Only world-record lifters move ${kg} kg-equivalent. Ordinary human: NOT REAL.`);
+    else if (kg * gL > HUMAN.carryKg.value) reason(r, "REAL", 0.85, `${kg} kg is liftable but past the ${HUMAN.carryKg.value} kg comfort limit — no running, stamina drains 3×.`);
+    else reason(r, "REAL", 0.9, `${kg} kg is within comfortable carry capacity (force ${(kg * planet.gravity).toFixed(0)} N).`);
     return r;
   }
 
@@ -149,9 +152,21 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     return r;
   }
 
+  // 5b. HUMAN FALL — trauma-table survival odds (before ballistics grabs jump/fall).
+  if (/human|person|astronaut|player|you\b|\bi\b/.test(p) && /fall|jump|drop|plunge/.test(p)) {
+    const hM = p.match(/(\d+(?:\.\d+)?)\s?m/);
+    const r = fresh(input, envName);
+    if (!hM) { reason(r, "MIXED", 0.4, "Name a height: 'fall 12m' (human)."); return r; }
+    const h = parseFloat(hM[1]);
+    const v = fallSurvival(h, FALL_ODDS);
+    r.measurements = { heightM: h, note: "LD50 ≈ 12 m" };
+    reason(r, v.includes("NOT REAL") ? "NOT REAL" : v.includes("MIXED") || v.includes("coin flip") ? "MIXED" : "REAL", 0.9, v);
+    return r;
+  }
+
   // 6. THROW / SHOOT / LAUNCH — ballistic verdict + simulated arc.
   const velM = p.match(/(\d+(?:\.\d+)?)\s?m\/s/);
-  if (/throw|shoot|launch|fire|projectile|jump|fall|drop/.test(p)) {
+  if (/throw|shoot|launch|fire|projectile|jump|fall|drop/.test(p) && !/laser|lase/.test(p)) {
     const r = fresh(input, envName);
     const v0 = velM ? parseFloat(velM[1]) : 0;
     const hM = p.match(/from\s(\d+(?:\.\d+)?)\s?m|(\d+(?:\.\d+)?)\s?m\s(high|tall|drop|fall)/);
@@ -161,6 +176,8 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const w = new EngineWorld();
     w.env.gravity = planet.gravity;
     w.env.airDensity = planet.pressureAtm !== null && planet.pressureAtm < 0.01 ? 0.001 : PHYSICS.AIR_DENSITY;
+    const altM = p.match(/altitude\s(\d+(?:\.\d+)?)\s?m/);
+    if (altM) w.env.airDensity = altitudeDensity(parseFloat(altM[1]));
     const b = w.spawn({
       shape: "sphere", material: matId, sizeM: 0.5,
       pos: { x: 0, y: h0, z: 0 },
@@ -177,6 +194,7 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const vacRange = v0 ? projectileRange(v0, ang, planet.gravity) : 0;
     r.measurements = {
       v0ms: v0, heightM: h0, gravity: planet.gravity,
+      altitudeM: altM ? parseFloat(altM[1]) : 0, airDensity: +w.env.airDensity.toFixed(4),
       simRangeM: +range.toFixed(1), vacuumRangeM: +vacRange.toFixed(1),
       terminalVms: +terminalVelocity(b.massKg, b.dragCd, b.areaM2, w.env.airDensity).toFixed(1),
       broken: b.broken,
@@ -199,6 +217,132 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     reason(r, "REAL", 0.9, slides
       ? `At ${ang}° with μs=${pair[1].muS} it slides (tan ${ang}° > μs). Anything standing still there is NOT REAL.`
       : `At ${ang}° with μs=${pair[1].muS} it grips.`);
+    return r;
+  }
+
+  // 9. ELECTRIFY — conductivity vs breakdown (science.ts codex II).
+  if (/electr|shock|zap|taser|lightning|live wire|short circuit/.test(p)) {
+    const r = fresh(input, envName);
+    const ELEC_MAP: Record<string, string> = {
+      copper: "copper", aluminium: "aluminium", steel: "steel", titanium: "titanium",
+      graphite: "graphite", rubber: "rubber", teflon: "teflon",
+      water: "pureWater", ice: "pureWater", glass: "quartzGlass",
+    };
+    const key = ELEC_MAP[matId];
+    const vM = p.match(/(\d+(?:\.\d+)?)\s?(kv|v|volts)/);
+    const volts = vM ? parseFloat(vM[1]) * (vM[2] === "kv" ? 1000 : 1) : 230;
+    if (!key || !ELECTRICAL[key]) {
+      reason(r, "MIXED", 0.4, `No electrical data for ${mat.name} — name copper, steel, rubber, glass, water…`);
+      return r;
+    }
+    const e = ELECTRICAL[key];
+    const v = electroVerdict(e.conductivity, e.breakdownMVm, e.name);
+    r.measurements = { conductivitySm: e.conductivity, breakdownMVm: e.breakdownMVm, volts, certainty: e.certainty };
+    const holds = e.conductivity < 1e3 && volts < e.breakdownMVm * 1e6;
+    reason(r, "REAL", 0.92, v + (e.conductivity >= 1e3
+      ? ` At ${volts} V it arcs and flows.`
+      : holds ? ` At ${volts} V across ~1 m it holds (needs ${(e.breakdownMVm * 1e6).toExponential(0)} V to arc).`
+        : ` At ${volts} V it ARCS across ~1 m — insulation defeated.`));
+    if (fluidId === "seawater" || fluidId === "water") {
+      reason(r, "REAL", 0.85, `${FLUIDS[fluidId].name} (σ=${ELECTRICAL[fluidId === "seawater" ? "seawater" : "pureWater"].conductivity} S/m) spreads the current — lethal to swim in.`);
+    }
+    return r;
+  }
+
+  // 10. DISSOLVE / CORRODE — acid vs material timelines.
+  if (/dissolv|corrod|acid|bleach|drain cleaner|etch/.test(p)) {
+    const r = fresh(input, envName);
+    const acidId = /drain cleaner/.test(p) ? "drainCleaner"
+      : /gastric|stomach/.test(p) ? "gastricAcid"
+      : /bleach/.test(p) ? "bleach"
+      : /battery/.test(p) || /acid/.test(p) ? "batteryAcid"
+      : /pure water/.test(p) ? "pureWater" : "batteryAcid";
+    const CORR_MAP: Record<string, string> = {
+      steel: "steel", aluminium: "aluminium", titanium: "titanium", glass: "glass",
+      iron: "steel", copper: "steel",
+    };
+    const targetKey = /human|flesh|skin|hand|body|tissue/.test(p) ? "tissue" : CORR_MAP[matId];
+    const acid = ACIDS[acidId];
+    if (!targetKey || CORROSION_MIN[acidId][targetKey] === undefined) {
+      reason(r, "MIXED", 0.4, `No corrosion timeline for ${mat.name} in ${acid.name} — covered: steel, aluminium, titanium, glass, tissue.`);
+      return r;
+    }
+    const mins = CORROSION_MIN[acidId][targetKey];
+    const v = corrosionVerdict(mins, acid.name, targetKey === "tissue" ? "flesh" : mat.name);
+    r.measurements = { acid: acid.name, ph: acid.ph, minutesToDestroy10mm: mins >= IMMUNE_MIN ? "immune" : mins };
+    reason(r, mins >= IMMUNE_MIN ? "REAL" : "NOT REAL", 0.9, v + (mins >= IMMUNE_MIN ? " It survives." : " It does not survive."));
+    return r;
+  }
+
+  // 11. LASER — Snell refraction through a medium.
+  if (/laser|lase|\bbeam\b/.test(p)) {
+    const r = fresh(input, envName);
+    const OPT_MAP: Record<string, string> = { diamond: "diamond", glass: "glass", water: "water", ice: "ice" };
+    const key = OPT_MAP[matId] ?? (/sapphire/.test(p) ? "sapphire" : /flint/.test(p) ? "flint" : null);
+    if (!key || !OPTICS[key]) {
+      reason(r, "MIXED", 0.4, "Name the medium: glass, diamond, water, ice, sapphire.");
+      return r;
+    }
+    const o = OPTICS[key];
+    const { bendDeg, note } = snellBend(o.n);
+    r.measurements = { medium: o.name, refractiveIndex: o.n, dielectricConstant: o.epsilon, bendDegFrom45: +bendDeg.toFixed(1) };
+    reason(r, "REAL", 0.93, `Laser through ${o.name}: ${note}. High εr=${o.epsilon} also stores charge well.`);
+    return r;
+  }
+
+  // 12. ROLL — rolling-resistance stop distance.
+  if (/\broll\b/.test(p)) {
+    const r = fresh(input, envName);
+    const pairId = /rail|railroad|train/.test(p) ? "railSteel"
+      : /wet/.test(p) ? "tyreWet" : /gravel/.test(p) ? "tyreGravel"
+      : /sand/.test(p) ? "tyreSand" : /ice/.test(p) ? "tyreIce"
+      : /snow/.test(p) ? "tyreSnow" : /mud|truck/.test(p) ? "truckMud"
+      : /tank|tracks|crawler/.test(p) ? "tracksGround" : /clay|tractor/.test(p) ? "tractorClay"
+      : /concrete/.test(p) ? "tyreConcrete" : "tyreAsphalt";
+    const velM = p.match(/(\d+(?:\.\d+)?)\s?m\/s/);
+    const v0 = velM ? parseFloat(velM[1]) : 10;
+    const pr = ROLLING[pairId];
+    const d = rollingStop(v0, pr.crr, planet.gravity);
+    r.measurements = { pair: pr.name, crr: pr.crr, v0ms: v0, stopDistanceM: +d.toFixed(1) };
+    reason(r, "REAL", 0.9, `Coasting at ${v0} m/s on ${pr.name} (c_rr=${pr.crr}) rolls ~${d.toFixed(0)} m before stopping.`);
+    return r;
+  }
+
+  // 13. RADIATION — inverse-square dose from an isotope.
+  if (/radiat|sievert|geiger|uranium|plutonium|cobalt|radon|tritium|carbon-14|isotope/.test(p)) {
+    const r = fresh(input, envName);
+    const isoId = /cobalt/.test(p) ? "cobalt60"
+      : /plutonium-238|rtg/.test(p) ? "plutonium238" : /plutonium/.test(p) ? "plutonium239"
+      : /radon/.test(p) ? "radon222" : /tritium/.test(p) ? "tritium"
+      : /carbon-14/.test(p) ? "carbon14"
+      : /uranium-235|enriched/.test(p) ? "uranium235" : /uranium|depleted/.test(p) ? "uranium238" : null;
+    if (!isoId || !ISOTOPES[isoId]) {
+      reason(r, "MIXED", 0.4, "Name an isotope: cobalt-60, uranium, plutonium, radon, tritium.");
+      return r;
+    }
+    const iso = ISOTOPES[isoId];
+    const kgM = p.match(/(\d+(?:\.\d+)?)\s?kg/);
+    const dM = p.match(/(\d+(?:\.\d+)?)\s?m(?!\/s)/);
+    const dose = doseAt(iso.doseUSvH, kgM ? parseFloat(kgM[1]) : 1, dM ? parseFloat(dM[1]) : 1);
+    r.measurements = { isotope: iso.name, halfLifeS: iso.halfLifeS, doseUSvH: +dose.toFixed(2) };
+    if (dose >= 1000) reason(r, "NOT REAL", 0.97, `${dose.toFixed(0)} μSv/h — lethal within the hour. No unshielded handling.`);
+    else if (dose >= 10) reason(r, "MIXED", 0.85, `${dose.toFixed(1)} μSv/h — dangerous; minutes only, then shielding.`);
+    else if (dose >= 1) reason(r, "REAL", 0.85, `${dose.toFixed(2)} μSv/h — elevated, brief handling only.`);
+    else reason(r, "REAL", 0.9, `${dose.toFixed(2)} μSv/h — near background, safe to stand by.`);
+    return r;
+  }
+
+  // 14. GAS — ppm toxicity tiers.
+  if (/ppm|carbon monoxide|hydrogen sulfide|mercury vapor|toxic|gas leak/.test(p)) {
+    const r = fresh(input, envName);
+    const gasId = /sulfide|h2s|rotten/.test(p) ? "h2s" : /mercury/.test(p) ? "mercury" : "co";
+    const ppmM = p.match(/(\d+(?:\.\d+)?)\s?ppm/);
+    if (!ppmM) { reason(r, "MIXED", 0.4, "Name a concentration: '400 ppm carbon monoxide'."); return r; }
+    const ppm = parseFloat(ppmM[1]);
+    const g = GASTOX[gasId];
+    const v = toxicityTier(ppm, g, g.name);
+    r.measurements = { gas: g.name, ppm, lethalPpm: g.lethalPpm };
+    reason(r, v.includes("NOT") ? "NOT REAL" : "REAL", 0.9, v);
     return r;
   }
 

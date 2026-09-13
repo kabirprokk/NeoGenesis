@@ -6,24 +6,20 @@ nature-reclaimed, prehistoric-inspired Earth built on real geography.
 - `SCIENTIFIC_ASSUMPTIONS.md` — honest science/gameplay boundary (read first).
 - `ARCHITECTURE.md` — system map, streaming, LOD, data flow.
 - `frontend/` — React + TypeScript + Vite + Three.js (WebGPU-ready) client. Phase 1 playable now.
-- `backend/` — Node + TypeScript + Fastify + WebSocket API (player/save/journal/discoveries).
 - `shared/` — `WorldEraConfig`, geo math (WGS84/ECEF/ENU), solar/lunar, climate, ecology types.
-- `db/` — PostgreSQL + PostGIS schema + seed.
+- `engine/` — dependency-free reality engine (physics + materials + 12,000-model registry + verdicts).
 - `docs/` — development order, controls, API.
+- Persistence is 100% browser-local (localStorage). No server, no database, no Docker.
 
 ## Quick start
 
 ```powershell
-# 1. Database (PostGIS) + Redis via Docker
-docker compose up -d db redis
-# 2. Backend
-cd backend; npm install; npm run dev
-# 3. Frontend (new terminal)
+# Frontend only — no Docker, no backend, no database
 cd frontend; npm install; npm run dev
 # Open http://localhost:5173
 ```
 
-No Docker? Frontend runs standalone with localStorage saves (backend optional).
+Saves and journal persist in the browser via localStorage.
 
 ## The rules
 1. **ONE HUMAN.** No human NPCs, cities, roads, infrastructure. Ever (until a story expansion).
@@ -34,6 +30,8 @@ No Docker? Frontend runs standalone with localStorage saves (backend optional).
 ## Controls (Phase 1)
 WASD move · Shift run · C crouch · Space jump · F fire-light (campfire stub) · J journal ·
 M map · H toggle HUD · drag look / click-lock pointer.
+Neo bar (top): type an experiment (“throw a copper sphere from 100m in the water”) —
+Neo builds it live in front of you and renders the verdict · X experience lab · ` terminal.
 
 ## Development order
 Phase 1 (done): globe + coordinates + sun/moon/time + atmosphere + player →

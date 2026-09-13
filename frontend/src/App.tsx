@@ -13,13 +13,13 @@ import { WeatherSystem } from "./sim/weather.js";
 import { ambience } from "./audio/ambience.js";
 import { loadSave, storeSave } from "./api/client.js";
 import { DEFAULT_ERA } from "../../shared/src/era.js";
-import { PHYSICS } from "../../engine/src/index.js";
-import { EngineWorld } from "../../engine/src/index.js";
+import { PHYSICS, EngineWorld, NeoMemory, neoParse, neoScenario, neoNeedsExperience, runScenario, experience } from "../../engine/src/index.js";
 import { PlaneWorld } from "./lab/planeWorld.js";
 import { ExperiencePanel } from "./lab/ExperiencePanel.js";
 import { Terminal } from "./lab/Terminal.js";
+import { NeoBar } from "./lab/NeoBar.js";
 import { watchBus, type GameCtx } from "./lab/terminalCore.js";
-import { stagePrompt } from "./lab/stage.js";
+import { stageNeo } from "./lab/stage.js";
 
 const PLAYER_ID = "last-human";
 const GEO = { lat: 12.5, lon: 8.0 }; // sky/sun reference only — feet live in plane meters
@@ -35,6 +35,10 @@ export default function App() {
   const [started, setStarted] = useState(false);
   const stateRef = useRef({ x: 0, z: 0, vitals: freshVitals(), discoveries: [] as { name: string; lat: number; lon: number }[] });
   const apiRef = useRef<GameCtx | null>(null);
+  const neoMem = useRef<NeoMemory | null>(null);
+  if (neoMem.current === null && typeof localStorage !== "undefined") {
+    neoMem.current = NeoMemory.load(localStorage);
+  }
   const weatherOverride = useRef("clear");
 
   useEffect(() => {
@@ -78,11 +82,16 @@ export default function App() {
       const st = stateRef.current;
       void storeSave({ playerId: PLAYER_ID, lat: player.obj.position.x, lon: player.obj.position.z, alt: 0, ...st.vitals, eraPreset: DEFAULT_ERA.id, epochMs: Date.now(), updatedAt: new Date().toISOString() });
     };
-    // Terminal bridge: the lab assistant + user commands act on the LIVE game.
+    // Neo bridge: one flow — parse → build the rig live → face it → judge.
+    const lookAt = (x: number, z: number) => {
+      const dx = x - player.obj.position.x, dz = z - player.obj.position.z;
+      player.obj.rotation.y = Math.atan2(-dx, -dz);
+    };
     apiRef.current = {
       world,
       pos: () => ({ x: player.obj.position.x, y: player.obj.position.y, z: player.obj.position.z }),
       teleport: (x, z) => { player.obj.position.set(x, 0, z); stateRef.current.x = x; stateRef.current.z = z; },
+      lookAt,
       setTime: (h) => { simH = h; },
       setWeather: (kind) => { weatherOverride.current = kind; },
       addJournal: (text) => setEntries((p) => [{
@@ -90,10 +99,27 @@ export default function App() {
         lat: player.obj.position.x, lon: player.obj.position.z, at: new Date().toISOString(),
       }, ...p]),
       doSave: persist,
-      stage: (prompt) => {
-        const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(player.obj.quaternion);
-        return stagePrompt(world, prompt,
-          player.obj.position.x + fwd.x * 7, player.obj.position.z + fwd.z * 7);
+      runExperiment: (prompt) => {
+        const mem = neoMem.current ?? new NeoMemory();
+        neoMem.current = mem;
+        const plan = neoParse(prompt, mem);
+        // One parse, one truth: sim actions judge the staged scenario, closed-form
+        // actions (electrify, dissolve, lase, roll) judge via experience().
+        const verdict = plan.action && !neoNeedsExperience(plan) ? runScenario(prompt, neoScenario(plan)) : experience(prompt);
+        let staged: string[] | null = null;
+        if (plan.action) {
+          const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(player.obj.quaternion);
+          const ax = player.obj.position.x + fwd.x * 7, az = player.obj.position.z + fwd.z * 7;
+          staged = stageNeo(world, plan, ax, az).lines;
+          // Viewpoint: step back and face the rig — the experiment stays on screen.
+          player.obj.position.set(ax - fwd.x * 14, 0, az - fwd.z * 14);
+          lookAt(ax, az);
+          stateRef.current.x = player.obj.position.x; stateRef.current.z = player.obj.position.z;
+          watchBus.want = true;
+        }
+        mem.learn(prompt, plan);
+        try { mem.save(localStorage); } catch { /* private mode — memory only */ }
+        return { plan, verdict, staged, memory: mem.stats() };
       },
     };    let lastHud = 0, hudFaded = false, lastAct = performance.now();
     const onAct = () => { lastAct = performance.now(); };
@@ -226,11 +252,11 @@ export default function App() {
   return (
     <div>
       <div ref={mountRef} />
+      <NeoBar getCtx={() => apiRef.current} />
       <HUD pos={hud.pos} alt={hud.alt} tempC={hud.tempC} timeStr={hud.time} weather={hud.wx} vitals={vitals} faded={hud.faded} era="Reality engine · 9.80665 m/s²" />
       <Journal open={journalOpen} onClose={() => setJournalOpen(false)} entries={entries}
         onAdd={(e) => setEntries((p) => [e, ...p])} lat={stateRef.current.x} lon={stateRef.current.z} playerId={PLAYER_ID} />
-      <ExperiencePanel open={labOpen} onClose={() => setLabOpen(false)}
-        onStage={(p) => apiRef.current?.stage(p) ?? null} />
+      <ExperiencePanel open={labOpen} onClose={() => setLabOpen(false)} getCtx={() => apiRef.current} />
       <Terminal open={termOpen} getCtx={() => apiRef.current} />
     </div>
   );

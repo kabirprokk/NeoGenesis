@@ -3,17 +3,25 @@
 // executor can drive headless agents.
 import { runTool, TOOLS } from "../../../engine/src/index.js";
 import type { EngineWorld } from "../../../engine/src/index.js";
-import { stagePrompt } from "./stage.js";
+import type { NeoPlan } from "../../../engine/src/index.js";
+import type { ExperienceResult } from "../../../engine/src/index.js";
+
+export interface NeoRunResult {
+  plan: NeoPlan | null; verdict: ExperienceResult; staged: string[] | null;
+  memory: { runs: number; words: number; unknown: number };
+}
 
 export interface GameCtx {
   world: EngineWorld;
   pos: () => { x: number; y: number; z: number };
   teleport: (x: number, z: number) => void;
+  lookAt: (x: number, z: number) => void;
   setTime: (h: number) => void;
   setWeather: (kind: string) => void;
   addJournal: (text: string) => void;
   doSave: () => void;
-  stage: (prompt: string) => string[] | null;
+  /** One flow: parse → build the rig in the live world → face it → judge. */
+  runExperiment: (prompt: string) => NeoRunResult;
 }
 
 // Live event stream: App drains world.log into fn while want is true.
@@ -112,10 +120,15 @@ export function execCommand(raw: string, g: GameCtx): string[] {
     return [JSON.stringify(r.result, null, 1).slice(0, 1500)];
   }
   if (h === "do" || h === "stage") {
-    const staged = g.stage(tail);
-    if (!staged) return verdictLines(tail, false);
+    const r = g.runExperiment(tail);
     watchBus.want = true;
-    return [...staged, "streaming live events — `watch` to stop"];
+    const head = r.plan?.action
+      ? [`neo: ${r.plan.steps.map(([k, v]) => `${k} ${v}`).join(" · ")}`]
+      : [`neo: no action word — judged without staging`];
+    return [...head, ...(r.staged ?? []),
+      `${r.verdict.verdict} (${r.verdict.confidence})`,
+      ...r.verdict.reasons.slice(0, 2),
+      "streaming live events — `watch` to stop"];
   }
   if (h === "watch") {
     watchBus.want = !watchBus.want;

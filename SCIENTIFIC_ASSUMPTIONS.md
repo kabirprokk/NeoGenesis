@@ -109,8 +109,8 @@ Switching presets must never introduce human NPCs/civilization.
 - Time: real solar position math (NOAA-style), but day length fixed at 24 h (Cretaceous days
   were ~23.5 h — noted, not simulated by default; toggleable in `WorldEraConfig`).
 - Moon: real phase/geometry math, simplified ephemeris (low-precision lunar theory, ±arcmin).
-- Multiplayer: forbidden initially (ONE HUMAN rule); backend keeps `playerId` isolation so a
-  future story expansion could revisit the rule without schema rewrites.
+- Multiplayer: forbidden initially (ONE HUMAN rule); the client keeps `playerId` isolation so a
+  future story expansion could revisit the rule without storage rewrites.
 - Persistence: player state/discoveries/journal saved; terrain vertices never stored.
 
 ## 9. What we will never claim

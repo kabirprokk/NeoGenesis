@@ -54,3 +54,48 @@ export function dragCd(profile: string): number { return DRAG_CD[profile] ?? DRA
 export function viscousDrag(viscosityPas: number, radiusM: number, vMs: number): number {
   return 6 * Math.PI * viscosityPas * radiusM * vMs;
 }
+// ---- Data-set-1 verdicts (science.ts codex II) ----
+/** Electrical: conductors (σ ≥ 1e3 S/m) carry current; insulators hold to breakdown. */
+export function electroVerdict(conductivity: number, breakdownMVm: number, matName: string): string {
+  if (conductivity >= 1e3) return `${matName} (σ=${conductivity.toExponential(1)} S/m) conducts — current flows, sparks at contact. REAL.`;
+  return `${matName} (σ=${conductivity.toExponential(1)} S/m) insulates to ${breakdownMVm} MV/m — holds household voltage. REAL.`;
+}
+/** Corrosion: minutes to destroy 10 mm; >= 99999 = immune. */
+export function corrosionVerdict(minutes: number, acidName: string, matName: string): string {
+  if (minutes >= 99999) return `${matName} is immune to ${acidName} — passivation holds indefinitely. REAL.`;
+  if (minutes < 1) return `${acidName} destroys ${matName} in under a minute — near-instant. REAL.`;
+  if (minutes < 60) return `${acidName} eats through ${matName} in ~${minutes} min — violent, visible bubbling. REAL.`;
+  if (minutes < 1440) return `${acidName} defeats ${matName} in ~${(minutes / 60).toFixed(1)} h — slow etching. REAL.`;
+  return `${acidName} vs ${matName}: ~${(minutes / 1440).toFixed(1)} days — effectively safe short-term. REAL.`;
+}
+/** Snell refraction air → medium at 45° incidence. Returns bend angle in medium. */
+export function snellBend(n: number): { bendDeg: number; note: string } {
+  const s = Math.sin(Math.PI / 4) / n;
+  if (s >= 1) return { bendDeg: NaN, note: "total internal reflection — beam trapped" };
+  const bendDeg = (Math.asin(s) * 180) / Math.PI;
+  return { bendDeg, note: `45° in air → ${bendDeg.toFixed(1)}° inside (n=${n})` };
+}
+/** Rolling stop distance from speed v with coefficient c_rr on flat ground. */
+export function rollingStop(vMs: number, crr: number, g = PHYSICS.G_EARTH): number {
+  return (vMs * vMs) / (2 * g * Math.max(1e-6, crr));
+}
+/** Radiation dose at distance (inverse square, 1 kg reference mass). */
+export function doseAt(baseUSvH: number, massKg: number, distM: number): number {
+  return (baseUSvH * massKg) / Math.max(0.25, distM * distM);
+}
+/** Gas toxicity tier at ppm. */
+export function toxicityTier(ppm: number, t: { warnPpm: number; minorPpm: number; severePpm: number; lethalPpm: number }, gasName: string): string {
+  if (ppm >= t.lethalPpm) return `${ppm} ppm ${gasName} is instantly lethal — unconscious in seconds. NOT survivable.`;
+  if (ppm >= t.severePpm) return `${ppm} ppm ${gasName}: severe — blackout/health drain within minutes. NOT REAL to ignore.`;
+  if (ppm >= t.minorPpm) return `${ppm} ppm ${gasName}: symptoms (blur, cough, shake) but survivable briefly. REAL.`;
+  if (ppm >= t.warnPpm && t.warnPpm > 0) return `${ppm} ppm ${gasName}: warning smell only. REAL and safe.`;
+  return `${ppm} ppm ${gasName}: below effect threshold. REAL, no symptoms.`;
+}
+/** Human fall survival odds (nearest-below bracket of trauma table). */
+export function fallSurvival(heightM: number, odds: { heightM: number; odds: number; note: string }[]): string {
+  let cur = odds[0];
+  for (const o of odds) if (heightM >= o.heightM) cur = o;
+  if (heightM > odds[odds.length - 1].heightM)
+    return `Above ${odds[odds.length - 1].heightM} m — survival ≈ ${(odds[odds.length - 1].odds * 100).toFixed(0)}% or worse (${odds[odds.length - 1].note}). NOT REAL to walk away.`;
+  return `From ${heightM} m: ~${(cur.odds * 100).toFixed(0)}% survive (${cur.note}). ${cur.odds >= 0.9 ? "REAL to survive." : cur.odds >= 0.5 ? "MIXED — coin flip." : "NOT REAL to walk away."}`;
+}

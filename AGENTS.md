@@ -26,4 +26,4 @@ The plane world runs the same engine. To put a result in front of the user:
 2. Only `restitution` is tuned (labeled); everything else is codex table data.
 3. 12,000 models via `model-get`/`model-search`/`model-spawn` — deterministic by index.
 4. ONE HUMAN rule stands: bodies and tools are objects, never NPCs.
-5. `npm test` in `engine/` must stay green (28 checks). Add a check when you add physics.
+5. `npm test` in `engine/` must stay green (52 checks). Add a check when you add physics.

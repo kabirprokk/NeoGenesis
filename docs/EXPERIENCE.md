@@ -24,6 +24,25 @@ JSON scenarios give full control: bodies (shape/material/size/height/velocity/
 temperature), environment preset or raw gravity/air/ambient, duration, and explicit
 checks (`survives-fall`, `floats-in`, `scratch`, `melt-at`, `hear-at`).
 
+## Neo — the in-world AI (`engine/src/neo.ts`, no AI API)
+
+Type in the Neo bar (top of the screen), the Experience Lab (X), or the
+terminal (`do …`). One flow everywhere: `runExperiment()` parses the sentence
+into WHAT → OBJECT → FROM → TO, builds the rig in the live world, steps you
+back to face it, streams engine events live, then judges the same scenario it
+staged — verdict and visuals can never disagree.
+
+- Grammar: ~50 verbs (throw/yeet, melt, crush, blast, build, pour…), 13 shapes,
+  24 materials + aliases, mm/cm/m/km/ft/in units, ground + 9 fluids + planets.
+  `neoPatternCount()` proves 10,000+ sentence structures; `neoSamples(seed, n)`
+  materializes deterministic examples. Typo-tolerant (Levenshtein ≤ 2).
+- Tools: `neo-parse` (plan + tool choice), `neo-scenario` (scenario JSON),
+  `neo-samples` — Neo visibly picks `verdict` (thresholds) vs `scenario`
+  (120 Hz sim) per action.
+- Memory: every run is learned into localStorage (`neo-memory-v1`) — your words
+  override the grammar after 2 uses, unknown words are counted for review.
+  No network, no API keys, fully browser-local.
+
 ## The 10,000+ models
 `engine/src/models.ts` holds a deterministic 12,000-entry registry (12 classes ×
 10 materials × 10 sizes × 10 configs): `getModel(i)` / `spawnModel(world, i)` —

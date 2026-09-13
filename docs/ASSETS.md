@@ -18,8 +18,10 @@ swap these three files for direct NASA Visible Earth Blue Marble + ETOPO1/GEBCO 
 no code change needed (`EarthData` samples any equirectangular pair).
 
 ## 3D models (vendored)
-`public/models/` — real rigged/animated GLBs loaded by `ModelLibrary`
-(`frontend/src/three/models.ts`), all with procedural fallback if absent:
+`public/models/` — real rigged/animated GLBs (slot convention: Y-up, meters,
+origin at feet), all with procedural fallback if absent. Note: the runtime GLB
+loader (`three/models.ts`) was removed with the dead fauna code, so these files
+are currently staged assets, not live-loaded:
 
 | slot | role | source |
 |---|---|---|
@@ -37,7 +39,8 @@ stand-ins: no freely-redistributable, scientifically-rigorous dinosaur scans wit
 URLs were found. To upgrade with zero code change, drop files into `public/models/`
 following the slot convention (Y-up, meters, origin at feet): `trex.glb`, `hadrosaur.glb`,
 `raptor.glb`, `mammoth.glb`, `pterosaur.glb`, `conifer.glb`, `palm.glb`, `fern.glb`,
-`rock-basalt.glb`, `rock-granite.glb` — `ModelLibrary`/`MODEL_SLOTS` picks them up.
+`rock-basalt.glb`, `rock-granite.glb` — picked up automatically once the slot
+loader is re-added.
 Recommended sources: Smithsonian Open Access (CC0, fossils/skeletons — ideal for the
 fossil-discovery system), Sketchfab-licensed scans, Quaternius (CC0, stylized flora).
 For commercial release, replace three.js example models with directly-licensed scans.

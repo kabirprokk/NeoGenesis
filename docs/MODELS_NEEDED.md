@@ -1,8 +1,9 @@
 # MODELS_NEEDED — yes, please send 3D models. This is the exact shopping list.
 
-Drop files into `C:\NeoGenesis\frontend\public\models\`. No code changes, no config —
-`ModelLibrary` picks them up on next load and auto-replaces the matching stand-ins
-(fauna swaps instantly; flora/rocks apply on the next terrain refresh).
+Drop files into `C:\NeoGenesis\frontend\public\models\`. Slot convention below (Y-up,
+meters, origin at feet). Note: the runtime model loader was removed with the dead
+terrain/fauna code — dropping files here stages them for when the loader is
+re-added; nothing picks them up yet.
 
 ## Hard requirements (all 12 slots)
 - Format: **GLB** (`.glb`, embedded textures — single file per slot, no sidecars)

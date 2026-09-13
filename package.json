@@ -2,10 +2,10 @@
   "name": "neogenesis",
   "private": true,
   "version": "0.1.0",
-  "workspaces": ["frontend", "backend", "shared", "engine"],
+  "workspaces": ["frontend", "shared", "engine"],
   "scripts": {
-    "dev": "npm run dev -w backend & npm run dev -w frontend",
-    "build": "npm run build -w shared & npm run build -w backend & npm run build -w frontend",
-    "typecheck": "tsc -b"
+    "dev": "npm run dev -w frontend",
+    "build": "npm run build -w shared & npm run build -w frontend",
+    "typecheck": "tsc --noEmit -p frontend"
   }
 }
