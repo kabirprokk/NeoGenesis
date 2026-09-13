@@ -6,17 +6,20 @@ import type { GameCtx, NeoRunResult } from "./terminalCore.js";
 
 const PRESETS = [
   "throw a copper sphere from 100m in the water",
+  "throw a metal cube at the speed of light from 10000m in the sky into the water",
   "melt a lead cube in lava",
   "crush a glass box from 50m on the ground",
   "can a human lift 300kg on Earth",
-  "does steel scratch quartz",
+  "does brass scratch granite",
   "float oak in honey",
+  "drop a silver ball from a tower on Mars",
+  "drop a steel and a glass box from 50m",
 ];
 
 function Badge({ v }: { v: NeoRunResult["verdict"]["verdict"] }) {
   const bg = v === "REAL" ? "#1d3a24" : v === "NOT REAL" ? "#3a1d1d" : "#3a331d";
   const fg = v === "REAL" ? "#8fe39a" : v === "NOT REAL" ? "#ff9a8a" : "#e8cf7a";
-  return <span style={{ background: bg, color: fg, padding: "3px 10px", borderRadius: 6, fontWeight: 700 }}>{v}</span>;
+  return <span key={v} style={{ background: bg, color: fg, padding: "3px 10px", borderRadius: 6, fontWeight: 700, display: "inline-block", animation: "neo-pop 0.35s ease-out" }}>{v}</span>;
 }
 
 export function ExperiencePanel({ open, onClose, getCtx }: { open: boolean; onClose: () => void; getCtx: () => GameCtx | null }) {

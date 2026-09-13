@@ -91,6 +91,60 @@ export function toxicityTier(ppm: number, t: { warnPpm: number; minorPpm: number
   if (ppm >= t.warnPpm && t.warnPpm > 0) return `${ppm} ppm ${gasName}: warning smell only. REAL and safe.`;
   return `${ppm} ppm ${gasName}: below effect threshold. REAL, no symptoms.`;
 }
+/** Sensible heat: energy (J) to move mass through ΔT. Q = m·c·ΔT. */
+export function heatEnergyJ(massKg: number, specificHeat: number, deltaTK: number): number {
+  return massKg * specificHeat * deltaTK;
+}
+/** Total energy (kJ) to bring 1 kg from ambient to liquid: sensible + latent fusion. */
+export function meltEnergyKJ(specificHeat: number, meltC: number, ambientC: number, fusionKJkg = 0): number {
+  return (specificHeat * Math.max(0, meltC - ambientC)) / 1000 + Math.max(0, fusionKJkg);
+}
+/** Lumped-capacitance heating time (s): mass m, area A, convection h, bath Tinf.
+ *  t = (m·c/(h·A))·ln((Tinf−T0)/(Tinf−T1)). Requires T1 < Tinf. */
+export function heatTimeS(massKg: number, specificHeat: number, areaM2: number, h: number, tInfC: number, t0C: number, t1C: number): number {
+  if (t1C >= tInfC || h <= 0 || areaM2 <= 0) return NaN;
+  return ((massKg * specificHeat) / (h * areaM2)) * Math.log((tInfC - t0C) / (tInfC - t1C));
+}
+/** Lorentz factor at velocity v (m/s). */
+export function lorentz(vMs: number, c = PHYSICS.C): number {
+  const b = Math.min(0.999999999, vMs / c);
+  return 1 / Math.sqrt(1 - b * b);
+}
+/** Relativistic kinetic energy (J): (γ−1)·m·c². */
+export function relKineticJ(massKg: number, vMs: number, c = PHYSICS.C): number {
+  return (lorentz(vMs, c) - 1) * massKg * c * c;
+}
+/** Circular orbit velocity (m/s) at altitude over a body with parameter mu. */
+export function orbitVelocity(mu: number, radiusM: number, altitudeM: number): number {
+  return Math.sqrt(mu / (radiusM + Math.max(0, altitudeM)));
+}
+/** Escape velocity (m/s) from a body surface. */
+export function escapeVelocity(mu: number, radiusM: number): number {
+  return Math.sqrt((2 * mu) / radiusM);
+}
+/** Orbital period (s) of a circular orbit. */
+export function orbitPeriodS(mu: number, radiusM: number, altitudeM: number): number {
+  const r = radiusM + Math.max(0, altitudeM);
+  return 2 * Math.PI * Math.sqrt((r * r * r) / mu);
+}
+/** Distance to the horizon (m) from eye height h over radius R. */
+export function horizonM(eyeM: number, radiusM = 6.371e6): number {
+  return Math.sqrt(2 * radiusM * Math.max(0, eyeM));
+}
+/** Speed of sound in dry air (m/s) at temperature: c = 331.3·√(T/273.15). */
+export function soundSpeed(tempC: number): number {
+  return 331.3 * Math.sqrt(Math.max(1, tempC + 273.15) / 273.15);
+}
+/** Gravity at altitude h over a body of surface gravity g0 and radius R. */
+export function gravityAt(g0: number, radiusM: number, altitudeM: number): number {
+  const r = radiusM + Math.max(0, altitudeM);
+  return g0 * (radiusM * radiusM) / (r * r);
+}
+/** Blackbody radiative flux (W/m²) at surface temperature: σT⁴. */
+export function blackbodyFlux(tempC: number): number {
+  const T = tempC + 273.15;
+  return PHYSICS.STEFAN_BOLTZMANN * T * T * T * T;
+}
 /** Human fall survival odds (nearest-below bracket of trauma table). */
 export function fallSurvival(heightM: number, odds: { heightM: number; odds: number; note: string }[]): string {
   let cur = odds[0];

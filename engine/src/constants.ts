@@ -19,4 +19,13 @@ export const PHYSICS: Record<string, number> = {
   AIR_DENSITY: 1.225,
   /** Water density, kg/m³ */
   WATER_DENSITY: 1000,
+  /** Stefan-Boltzmann constant, W/m²·K⁴ */
+  STEFAN_BOLTZMANN: 5.670374419e-8,
+  /** Specific gas constant of dry air, J/kg·K */
+  R_AIR: 287.058,
+  /** Sea-level speed of sound reference temperature, °C */
+  SOUND_REF_C: 20,
 };
+
+/** Codex dataset version — bumped whenever table data changes. Stamped on every verdict. */
+export const CODEX_VERSION = "1.5.0";

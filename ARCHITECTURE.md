@@ -12,36 +12,38 @@ C:\NeoGenesis\
 Persistence is browser-local (localStorage via `frontend/src/api/client.ts`).
 No server, no database, no Docker.
 
-## Coordinate pipeline (real planet, no jitter)
-WGS84 lat/lon/alt → ECEF (double, shared) → local ENU around floating origin →
-Three.js scene (float32, origin rebased when player moves > 5 km). `shared/src/geo.ts`
-implements `llaToEcef`, `ecefToEnu`, `enuToEcef`, `ecefToLla`, `FloatingOrigin`.
-Player may travel thousands of km without precision degradation.
+## Coordinates (plane world, present state)
+Feet live in plane metres around the spawn; the ground mesh follows the player
+in 10 m snaps so floating-point precision never degrades. `shared/src/geo.ts`
+(WGS84/ECEF/ENU, `FloatingOrigin`) and the sky's lat/lon sun math remain as the
+library for a future terrain build — the playable game doesn't stream terrain.
 
-## Frame data flow
+## Frame data flow (plane world, present state)
 ```
-WorldEraConfig → Climate → Biome → Vegetation/Water/Weather → Ecology(LOD) → Player/Survival → HUD/Journal
+EngineWorld (120 Hz fixed step) → PlaneWorld meshes + fluids → Player/Survival → HUD/Journal
         ↑ PlanetTime (real solar math) → Sun/Moon/Atmosphere uniforms
-WorldStreamer: player region → required tiles (quadtree) → fetch prioritized → evict distant → LOD swap
+Neo runExperiment: sentence → plan → staged rig → live sim → verdict
 ```
 
-## Simulation LOD (distance-based, §7 of spec)
-- LOCAL (<~1 km): individual agents — movement, perception, hunger/thirst, combat/flee.
-- REGIONAL (<~100 km): cohort ODEs (Lotka-Volterra-ish + water/vegetation carrying capacity).
-- GLOBAL: statistical per-biome population means, ticked rarely, cached in memory.
-Frontend ticks LOCAL; REGIONAL/GLOBAL cohorts tick in `shared/src/ecology.ts`.
+## Simulation (present state)
+- EngineWorld: rigid bodies (box/sphere) + fluid volumes, 120 Hz fixed step,
+  gravity, quadratic drag, buoyancy + viscosity, bounce/friction, shatter/melt/ignite.
+- Cohorts/ODEs tick in `shared/src/ecology.ts` for verdicts (no live agents).
+- ONE HUMAN: no NPCs anywhere; species seeds contain no hominins.
 
-## Rendering
-Three.js globe (custom atmosphere shader: Rayleigh+Mie-inspired) → terrain quadtree tiles
-(heightfield workers) → instanced vegetation → water plane → volumetric-ish clouds (billboard
-noise, budget-capped) → PBR sun + HDR tonemap + shadows near-field only + distance fog/AO.
-WebGPU path: renderer abstraction (`frontend/src/three/renderer.ts`) — WebGL2 today,
-WebGPU when available.
+## Rendering (present state)
+Three.js WebGL2: 4 km ground plane (canvas grid texture) + one PBR mesh per
+engine body (material metalness/roughness, crate edges, crush/melt/burn state)
++ fluid volumes with surfaces + glass tank walls + Neo rig props (chambers,
+spark gap, laser bench, marker ring + label) + atmosphere shell, sun/moon with
+shadow frustum following the player, stars, distance fog. No terrain tiles,
+no workers, no WebGPU path yet.
 
 ## Persistence (browser-local, multiplayer-forbidden)
 Saves + journal live in localStorage, keyed by `playerId` (`frontend/src/api/client.ts`).
 ONE_HUMAN rule enforced: no NPC endpoints exist anywhere; species seeds contain no hominins.
 
 ## Budgets (60 FPS target)
-Web Workers for terrain/biome; GPU instancing; object pooling; texture streaming;
-memory budget 512 MB + tile LRU; network budget: tile ≤ 128 KB, eco deltas ≤ 10 KB/s.
+Fixed-step sim decoupled from frame rate; meshes pooled per body id and
+removed on cleanup; fluid volumes rebuilt only when the set changes;
+single reused rig light; no per-frame allocations in the hot loop.

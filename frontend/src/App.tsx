@@ -4,8 +4,14 @@
 // run prompts as live experiments with REAL/NOT REAL verdicts.
 import React, { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { buildGlobe, updateSky } from "./three/globe.js";
-import { PlayerController } from "./three/player.js";
+import { buildClouds } from "./three/clouds.js";
+import { PlayerController, uiHasFocus } from "./three/player.js";
 import { HUD } from "./ui/HUD.js";
 import { Journal, type JEntry } from "./ui/Journal.js";
 import { freshVitals, tickVitals } from "./sim/survival.js";
@@ -13,8 +19,9 @@ import { WeatherSystem } from "./sim/weather.js";
 import { ambience } from "./audio/ambience.js";
 import { loadSave, storeSave } from "./api/client.js";
 import { DEFAULT_ERA } from "../../shared/src/era.js";
-import { PHYSICS, EngineWorld, NeoMemory, neoParse, neoScenario, neoNeedsExperience, runScenario, experience } from "../../engine/src/index.js";
+import { PHYSICS, MATERIALS, EngineWorld, NeoMemory, neoParse, neoScenario, neoNeedsExperience, runScenario, experience } from "../../engine/src/index.js";
 import { PlaneWorld } from "./lab/planeWorld.js";
+import type { RigKind } from "./lab/planeWorld.js";
 import { ExperiencePanel } from "./lab/ExperiencePanel.js";
 import { Terminal } from "./lab/Terminal.js";
 import { NeoBar } from "./lab/NeoBar.js";
@@ -33,7 +40,7 @@ export default function App() {
   const [termOpen, setTermOpen] = useState(false);
   const [entries, setEntries] = useState<JEntry[]>([]);
   const [started, setStarted] = useState(false);
-  const stateRef = useRef({ x: 0, z: 0, vitals: freshVitals(), discoveries: [] as { name: string; lat: number; lon: number }[] });
+  const stateRef = useRef({ x: 0, z: 0, vitals: freshVitals() });
   const apiRef = useRef<GameCtx | null>(null);
   const neoMem = useRef<NeoMemory | null>(null);
   if (neoMem.current === null && typeof localStorage !== "undefined") {
@@ -47,15 +54,35 @@ export default function App() {
     if (!mount) return;
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
     renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
     renderer.domElement.className = "webgl";
     mount.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
     scene.fog = new THREE.FogExp2(0x9db3c8, 0.0016);
+    // Image-based lighting: metals/glass/water reflect a neutral studio sky.
+    // This single addition is why chrome finally looks like chrome.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.dispose();
+    scene.environmentIntensity = 0.45;
+    const hemi = new THREE.HemisphereLight(0xbdd3e6, 0x54503e, 0.5);
+    scene.add(hemi);
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.3, 8000);
     const sky = buildGlobe(scene);
+    const clouds = buildClouds(scene);
+
+    // Bloom: lava, fire, laser, sparks and the sun glow; everything else stays clean.
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const bloom = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight), 0.35, 0.65, 0.85);
+    composer.addPass(bloom);
+    composer.addPass(new OutputPass());
 
     // The plain solid world + the engine that runs it.
     const plane = new PlaneWorld();
@@ -77,7 +104,7 @@ export default function App() {
 
     const weather = new WeatherSystem();
     const clock = new THREE.Clock();
-    let simH = 10, acc = 0, strideAcc = 0, watchIdx = 0;
+    let simH = 10, acc = 0, strideAcc = 0, watchIdx = 0, rafId = 0;
     const persist = () => {
       const st = stateRef.current;
       void storeSave({ playerId: PLAYER_ID, lat: player.obj.position.x, lon: player.obj.position.z, alt: 0, ...st.vitals, eraPreset: DEFAULT_ERA.id, epochMs: Date.now(), updatedAt: new Date().toISOString() });
@@ -110,7 +137,18 @@ export default function App() {
         if (plan.action) {
           const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(player.obj.quaternion);
           const ax = player.obj.position.x + fwd.x * 7, az = player.obj.position.z + fwd.z * 7;
+          plane.clearMarker();
+          plane.setRig(null, 0, 0, 0);
           staged = stageNeo(world, plan, ax, az).lines;
+          // Show what Neo built: ground marker + label, rig props per action.
+          const matName = MATERIALS[plan.material]?.name ?? plan.material;
+          plane.showMarker(ax, az, `${matName} ${plan.shape}`);
+          const rig: RigKind | null =
+            plan.action === "melt" || plan.action === "burn" || plan.action === "boil" ? "heat"
+            : plan.action === "freeze" ? "frost"
+            : plan.action === "electrify" ? "spark"
+            : plan.action === "lase" ? "laser" : null;
+          plane.setRig(rig, ax, az, Math.min(2, Math.max(0.2, plan.sizeM)));
           // Viewpoint: step back and face the rig — the experiment stays on screen.
           player.obj.position.set(ax - fwd.x * 14, 0, az - fwd.z * 14);
           lookAt(ax, az);
@@ -127,7 +165,7 @@ export default function App() {
     window.addEventListener("mousedown", onAct);
 
     const tick = () => {
-      requestAnimationFrame(tick);
+      rafId = requestAnimationFrame(tick);
       const dt = Math.min(0.05, clock.getDelta());
       simH += dt * 0.02;
       const st = stateRef.current;
@@ -146,13 +184,31 @@ export default function App() {
       while (acc >= 1 / 120) { world.step(1 / 120); acc -= 1 / 120; }
       plane.sync(world);
       plane.syncFluids(world.fluids);
+      plane.tick(dt, clock.elapsedTime, world);
 
       // Walk the plane. Feet at y=0, always.
-      const px = player.obj.position.x, pz = player.obj.position.z;
       st.x += player.vel.x * dt;
       st.z += player.vel.z * dt;
-      void px; void pz;
-      player.update(dt, 0, false);
+      // Solid world: every staged body and tank wall pushes the player back.
+      const cols: { x: number; z: number; r: number }[] = [];
+      for (const b of world.bodies) {
+        const dx = b.pos.x - player.obj.position.x, dz = b.pos.z - player.obj.position.z;
+        if (dx * dx + dz * dz > 1600) continue; // beyond 40 m, ignore
+        cols.push({ x: b.pos.x, z: b.pos.z,
+          r: b.shape === "sphere" ? b.radiusM : Math.max(b.halfM?.x ?? b.radiusM, b.halfM?.z ?? b.radiusM) });
+      }
+      let inWater = false;
+      for (const f of world.fluids) {
+        const p = player.obj.position;
+        if (p.x > f.min.x && p.x < f.max.x && p.z > f.min.z && p.z < f.max.z && p.y < f.max.y) { inWater = true; break; }
+      }
+      player.update(dt, 0, inWater, cols.length ? { colliders: cols } : undefined);
+      // Impact screen-shake from the particle rig (decays on its own).
+      const sh = plane.consumeShake();
+      if (sh > 0.02) {
+        camera.position.x += (Math.random() - 0.5) * sh * 0.35;
+        camera.position.y += (Math.random() - 0.5) * sh * 0.3;
+      }
       plane.follow(player.obj.position.x, player.obj.position.z);
       strideAcc += Math.hypot(player.vel.x, player.vel.z) * dt;
       if (strideAcc > (player.keys.run ? 2.8 : 2.1) && player.grounded) {
@@ -162,6 +218,7 @@ export default function App() {
 
       // Sky + sun shadow frustum follows the player.
       const skyInfo = updateSky(sky, epoch, GEO.lat, GEO.lon);
+      clouds.tick(dt, sky.sun.intensity < 0.4 ? 1 : 0);
       sky.sun.position.copy(player.obj.position).addScaledVector(skyInfo.sunDir, 400);
       sky.sun.target.position.copy(player.obj.position);
       sky.sun.target.updateMatrixWorld();
@@ -169,7 +226,7 @@ export default function App() {
       scene.fog = new THREE.FogExp2(night ? 0x05070c : wx.storm ? 0x6b7683 : 0x9db3c8, night ? 0.0022 : 0.0016 + wx.fog01 * 0.004);
 
       st.vitals = tickVitals(st.vitals, dt * 0.02, { tempC: wx.tempC, inWater: false, running: player.keys.run, night });
-      if (Math.random() < dt * 0.02) ambience.distantCall(200 + Math.random() * 800);
+      // (No random distant calls — phantom cries were reported as a bug. Wind/water remain.)
 
       const now = performance.now();
       hudFaded = now - lastAct > 6000;
@@ -193,7 +250,7 @@ export default function App() {
         watchBus.fn(world.log.slice(watchIdx, watchIdx + 6).map((l) => `! ${l}`));
         watchIdx = world.log.length;
       }
-      renderer.render(scene, camera);
+      composer.render();
     };
     tick();
 
@@ -207,6 +264,10 @@ export default function App() {
     const saveTimer = window.setInterval(persist, 15000);
 
     const onKey = (e: KeyboardEvent) => {
+      if (uiHasFocus(e)) return; // writing in Neo bar / terminal / journal: only writing works
+      if (e.code === "KeyM") {
+        ambience.toggleMute(); // hard silence switch — no phantom sounds, ever
+      }
       if (e.code === "KeyH") setHud((h) => ({ ...h, faded: !h.faded }));
       if (e.code === "KeyJ") setJournalOpen((v) => !v);
       if (e.code === "KeyX") setLabOpen((v) => !v);
@@ -217,9 +278,11 @@ export default function App() {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
+      composer.setSize(window.innerWidth, window.innerHeight);
     };
     window.addEventListener("resize", onResize);
     return () => {
+      cancelAnimationFrame(rafId);
       window.clearInterval(saveTimer);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", onResize);
@@ -237,14 +300,14 @@ export default function App() {
         <p style={{ maxWidth: 560, textAlign: "center", fontSize: 14, opacity: 0.75 }}>
           A flat solid proving ground running on real gravity, real material data, and real
           thermodynamics. Walk it — then press X: give the Experience Lab a prompt, the engine
-          lives the experiment with 10,000+ models behind it, and renders its verdict.
+          lives the experiment with 100,000+ sentence structures behind it, and renders its verdict.
         </p>
         <button onClick={() => { setStarted(true); ambience.start(); }}
           style={{ background: "#1d2b1d", color: "#dfe8d5", border: "1px solid #3a4a3a",
             borderRadius: 8, padding: "12px 28px", cursor: "pointer", fontSize: 15, letterSpacing: "0.1em" }}>
           Enter the plane
         </button>
-        <p style={{ fontSize: 11, opacity: 0.5, marginTop: 12 }}>WASD + mouse · X experience lab · J journal</p>
+        <p style={{ fontSize: 11, opacity: 0.5, marginTop: 12 }}>WASD + mouse · X experience lab · J journal · M mute</p>
       </div>
     );
   }
@@ -252,6 +315,8 @@ export default function App() {
   return (
     <div>
       <div ref={mountRef} />
+      <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 5,
+        background: "radial-gradient(ellipse at center, transparent 52%, rgba(2,4,8,0.42) 100%)" }} />
       <NeoBar getCtx={() => apiRef.current} />
       <HUD pos={hud.pos} alt={hud.alt} tempC={hud.tempC} timeStr={hud.time} weather={hud.wx} vitals={vitals} faded={hud.faded} era="Reality engine · 9.80665 m/s²" />
       <Journal open={journalOpen} onClose={() => setJournalOpen(false)} entries={entries}

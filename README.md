@@ -1,13 +1,15 @@
-# NEOGENESIS — ONE HUMAN. ONE EARTH. NO CIVILIZATION.
+# NEOGENESIS — ONE HUMAN. ONE PLANE. REAL PHYSICS.
 
-Serious Earth-scale browser game + planetary simulation. The player is the only human on a
-nature-reclaimed, prehistoric-inspired Earth built on real geography.
+A browser physics laboratory for everyone and for scientists. One flat solid
+plane, real gravity, real material data, a reality engine, and Neo — an
+in-world AI that turns sentences into live experiments with measured verdicts.
+No eras, no biomes, no creatures, no decoration. Ever.
 
-- `SCIENTIFIC_ASSUMPTIONS.md` — honest science/gameplay boundary (read first).
-- `ARCHITECTURE.md` — system map, streaming, LOD, data flow.
-- `frontend/` — React + TypeScript + Vite + Three.js (WebGPU-ready) client. Phase 1 playable now.
-- `shared/` — `WorldEraConfig`, geo math (WGS84/ECEF/ENU), solar/lunar, climate, ecology types.
-- `engine/` — dependency-free reality engine (physics + materials + 12,000-model registry + verdicts).
+- `SCIENTIFIC_ASSUMPTIONS.md` — honest science boundary: what is measured, what is tuned (read first).
+- `ARCHITECTURE.md` — system map: engine, staging, Neo, rendering.
+- `frontend/` — React + TypeScript + Vite + Three.js client. Playable now.
+- `shared/` — pure-TS math: lab environment, geo math, solar/lunar.
+- `engine/` — dependency-free reality engine (physics + materials + science codex + Neo + verdicts).
 - `docs/` — development order, controls, API.
 - Persistence is 100% browser-local (localStorage). No server, no database, no Docker.
 
@@ -19,22 +21,23 @@ cd frontend; npm install; npm run dev
 # Open http://localhost:5173
 ```
 
-Saves and journal persist in the browser via localStorage.
+Saves, journal, and Neo's memory persist in the browser via localStorage.
 
 ## The rules
-1. **ONE HUMAN.** No human NPCs, cities, roads, infrastructure. Ever (until a story expansion).
-2. **Earth-scale, streamed.** Never load the whole planet. Quadtree LOD + floating origin.
-3. **No quest spam.** The world is the content. Field Journal records what *you* discover.
-4. **Emptiness is the point.** Silence, wind, distant calls — not music loops.
+1. **ONE HUMAN.** No NPCs. Ever.
+2. **Physics is the content.** Every experiment runs on real numbers — gravity, drag,
+   impact stress, melt points, conductivity, corrosion timelines — never vibes.
+3. **No quest spam.** The lab is the content. The journal records what *you* observe.
+4. **Honesty over spectacle.** Missing data returns MIXED with the gap named — never guessed.
 
-## Controls (Phase 1)
-WASD move · Shift run · C crouch · Space jump · F fire-light (campfire stub) · J journal ·
-M map · H toggle HUD · drag look / click-lock pointer.
+## Controls
+WASD move · Shift run · C crouch · Space jump · J journal · H toggle HUD ·
+drag look / click-lock pointer.
 Neo bar (top): type an experiment (“throw a copper sphere from 100m in the water”) —
 Neo builds it live in front of you and renders the verdict · X experience lab · ` terminal.
 
 ## Development order
-Phase 1 (done): globe + coordinates + sun/moon/time + atmosphere + player →
-Phase 2: terrain streaming/LOD/floating origin → Phase 3: biomes/vegetation/water/weather →
-Phase 4: wildlife/ecology → Phase 5: survival/fire/exploration → Phase 6: journal/discovery/geology.
+Phase 1 (done): plane world + sun/moon/time + atmosphere + player + Neo lab →
+Phase 2: more verbs, more tables, tighter verdicts → Phase 3: measurement tools
+(protractors, scales, graphs) → Phase 4: experiment sharing + reproducibility.
 See `docs/DEVELOPMENT_ORDER.md`.

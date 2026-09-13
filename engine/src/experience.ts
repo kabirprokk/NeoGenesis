@@ -11,29 +11,36 @@
 // Honesty policy: REAL only when the numbers clear thresholds. Anything unknowable
 // (missing data, ambiguous prompt) returns MIXED with the gap named — never guessed.
 import { PHYSICS } from "./constants.js";
-import { MATERIALS, FLUIDS, MOHS_LADDER, explosiveClass, EXPLOSIVES, FRICTION_PAIRS, REPOSE_DEG } from "./materials.js";
+import { MATERIALS, FLUIDS, MOHS_LADDER, explosiveClass, EXPLOSIVES, FRICTION_PAIRS } from "./materials.js";
 import { PLANETS } from "./planets.js";
 import { EngineWorld } from "./world.js";
 import {
-  terminalVelocity, humanTerminal, projectileRange, impact,
-  mohsVerdict, buoyancyVerdict, soundDelay, slidesOnIncline, reposeOk, dragCd,
+  terminalVelocity, humanTerminal, projectileRange,
+  mohsVerdict, buoyancyVerdict, soundDelay, slidesOnIncline,
   electroVerdict, corrosionVerdict, snellBend, rollingStop, doseAt, toxicityTier, fallSurvival,
+  heatEnergyJ, meltEnergyKJ, heatTimeS, lorentz, relKineticJ,
+  orbitVelocity, escapeVelocity, orbitPeriodS, horizonM,
+  soundSpeed, gravityAt, blackbodyFlux,
 } from "./physics.js";
-import { ELECTRICAL, ACIDS, CORROSION_MIN, IMMUNE_MIN, OPTICS, ROLLING, ISOTOPES, GASTOX, HUMAN, FALL_ODDS, altitudeDensity } from "./science.js";
+import { ELECTRICAL, ACIDS, CORROSION_MIN, IMMUNE_MIN, OPTICS, ROLLING, ISOTOPES, GASTOX, HUMAN, FALL_ODDS, SPECIFIC_HEAT, EMISSIVITY, UNCERTAINTY, H_CONV, altitudeDensity } from "./science.js";
+import { CODEX_VERSION } from "./constants.js";
 
 export type Verdict = "REAL" | "NOT REAL" | "MIXED";
 export interface TraceSample { t: number; y: number; v: number; tempC: number; event?: string }
 export interface ExperienceResult {
-  verdict: Verdict; confidence: number;
+  id: string; codex: string; verdict: Verdict; confidence: number;
   prompt: string; environment: string;
-  measurements: Record<string, number | string | boolean>;
-  trace: TraceSample[]; events: string[]; reasons: string[];
+  measurements: Record<string, number | string | boolean | unknown[]>;
+  uncertainty: Record<string, string>; // every key number above gets an error bar here
+  citations: string[]; // CITATIONS ids backing this verdict — `citations` tool renders BibTeX
+  trace: TraceSample[]; traces?: Record<string, TraceSample[]>;
+  events: string[]; reasons: string[];
 }
 export interface ScenarioDesc {
   env?: string; gravity?: number; ambientC?: number; airDensity?: number;
   durationS?: number;
-  bodies?: { shape?: "sphere" | "box"; material?: string; sizeM?: number; heightM?: number; vel?: [number, number, number]; tempC?: number; dragProfile?: string }[];
-  checks?: ({ kind: "survives-fall"; heightM: number } | { kind: "floats-in"; fluid: string } | { kind: "scratch"; tool: string; target: string } | { kind: "melt-at"; tempC: number } | { kind: "hear-at"; distM: number; mediumMs?: number })[];
+  bodies?: { shape?: "sphere" | "box"; material?: string; sizeM?: number; heightM?: number; vel?: [number, number, number]; tempC?: number; dragProfile?: string; ghost?: boolean; massKg?: number }[];
+  checks?: ({ kind: "survives-fall"; heightM: number; body?: number } | { kind: "floats-in"; fluid: string; body?: number } | { kind: "scratch"; tool: string; target: string; body?: number } | { kind: "melt-at"; tempC: number; body?: number } | { kind: "hear-at"; distM: number; mediumMs?: number })[];
 }
 
 const reason = (r: ExperienceResult, v: Verdict, c: number, text: string) => {
@@ -43,9 +50,36 @@ const reason = (r: ExperienceResult, v: Verdict, c: number, text: string) => {
   else if (v === "REAL") r.confidence = Math.max(r.confidence, c);
 };
 const fresh = (prompt: string, env: string): ExperienceResult => ({
+  id: `EXP-${String(++expCounter).padStart(4, "0")}`,
+  codex: CODEX_VERSION,
   verdict: "REAL", confidence: 0, prompt, environment: env,
-  measurements: {}, trace: [], events: [], reasons: [],
+  measurements: {}, uncertainty: {}, citations: [], trace: [], events: [], reasons: [],
 });
+let expCounter = 0;
+
+/** Attach an error bar: ±rel fraction rendered in engineering units. */
+const unc = (r: ExperienceResult, key: string, value: number, rel: number, why: string) => {
+  const plus = value * rel;
+  const fmt = (v: number): string => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(1) : v.toFixed(3);
+  r.uncertainty[key] = `±${fmt(plus)} (±${(rel * 100).toFixed(0)}%: ${why})`;
+};
+/** Cite a reference family exactly once. */
+const cite = (r: ExperienceResult, ...ids: string[]) => {
+  for (const id of ids) if (!r.citations.includes(id)) r.citations.push(id);
+};
+
+/** Time-series trace as CSV (all bodies when simulated). Paste straight into a spreadsheet. */
+export function verdictCSV(r: ExperienceResult): string {
+  const series = r.traces ?? { body0: r.trace };
+  const names = Object.keys(series);
+  const rows = [`experiment,id,t_s,body,y_m,v_ms,tempC,event`];
+  for (const b of names) {
+    for (const s of series[b]) {
+      rows.push([`"${r.prompt.slice(0, 60).replace(/"/g, "")}"`, r.id, s.t, b, s.y, s.v, s.tempC, `"${(s.event ?? "").replace(/"/g, "")}"`].join(","));
+    }
+  }
+  return rows.join("\n");
+}
 const MAT_ALIAS: Record<string, string> = {
   wood: "oak", wooden: "oak", metal: "steel", rock: "concrete", stone: "concrete",
   plastic: "teflon", "ice cube": "ice", human: "water",
@@ -80,6 +114,8 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const r = fresh(input, envName);
     const gL = planet.gravity / PHYSICS.G_EARTH;
     r.measurements = { massKg: kg, weightN: +(kg * planet.gravity).toFixed(1), earthEquivalentKg: +(kg * gL).toFixed(1), deadliftLimitKg: HUMAN.deadliftKg.value, carryComfortKg: HUMAN.carryKg.value };
+    cite(r, "osha");
+    unc(r, "deadliftLimitKg", HUMAN.deadliftKg.value, UNCERTAINTY.liftLimit.rel!, "athlete spread");
     if (kg * gL > HUMAN.deadliftKg.value) reason(r, "NOT REAL", 0.97, `No human lifts ${kg} kg at ${planet.gravity} m/s² — absolute spinal-failure limit is ${HUMAN.deadliftKg.value} kg on Earth.`);
     else if (kg * gL > 250) reason(r, "MIXED", 0.75, `Only world-record lifters move ${kg} kg-equivalent. Ordinary human: NOT REAL.`);
     else if (kg * gL > HUMAN.carryKg.value) reason(r, "REAL", 0.85, `${kg} kg is liftable but past the ${HUMAN.carryKg.value} kg comfort limit — no running, stamina drains 3×.`);
@@ -87,16 +123,97 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     return r;
   }
 
-  // 2. MELT / BURN verdicts.
-  const tempM = p.match(/(-?\d+(?:\.\d+)?)\s?°?c/);
+  // 2. MELT / BURN verdicts. Bare "degrees/degree" default to °C (science convention).
+  const tempM = p.match(/(-?\d+(?:\.\d+)?)\s?(?:°?c|degrees?|deg)\b/);
   if (/melt|burn|ignite|heat|freeze|boil|fire|lava/.test(p) && tempM) {
     const T = parseFloat(tempM[1]);
     const r = fresh(input, envName);
-    r.measurements = { tempC: T, meltC: mat.meltC ?? "unknown", ignitionC: mat.ignitionC ?? "unknown" };
-    if (mat.meltC !== undefined && T >= mat.meltC) reason(r, "REAL", 0.98, `${mat.name} melts at ${mat.meltC}°C — at ${T}°C it is liquid. You would watch it puddle.`);
-    else if (mat.ignitionC !== undefined && T >= mat.ignitionC) reason(r, "REAL", 0.95, `${mat.name} ignites at ${mat.ignitionC}°C — at ${T}°C it burns.`);
-    else if (mat.meltC !== undefined) reason(r, "NOT REAL", 0.95, `${mat.name} needs ${mat.meltC}°C to melt; ${T}°C only warms it. No melting. No fire.`);
+    const th = SPECIFIC_HEAT[matId];
+    const warmKJ = th ? +(heatEnergyJ(1, th.c, T - 20) / 1000).toFixed(1) : "unknown";
+    const meltKJ = th && mat.meltC !== undefined ? +meltEnergyKJ(th.c, mat.meltC, 20, th.lf).toFixed(1) : "unknown";
+    // Lumped-capacitance time for 1 kg (sphere) to approach the bath temperature.
+    let heatS: number | string = "unknown", heatHow = "still room air (h=10 W/m²·K)";
+    if (th) {
+      const rad = Math.cbrt(3 / (4 * Math.PI * mat.density));
+      const area = 4 * Math.PI * rad * rad;
+      const hot = T >= 800;
+      const h = hot ? H_CONV.furnace : H_CONV.stillAir;
+      heatHow = `${h.name} (h=${h.h} W/m²·K)`;
+      const target = mat.meltC !== undefined ? Math.min(T, mat.meltC - 1) : T;
+      const t = heatTimeS(1, th.c, area, h.h, T, 20, target);
+      if (Number.isFinite(t) && t > 0) heatS = +t.toFixed(0);
+    }
+    r.measurements = { tempC: T, meltC: mat.meltC ?? "unknown", ignitionC: mat.ignitionC ?? "unknown",
+      specificHeatJkgK: th?.c ?? "unknown", warm1kgFrom20CkJ: warmKJ, melt1kgFrom20CkJ: meltKJ,
+      timeToHeat1kgS: heatS, heatModel: heatHow,
+      emissivity: EMISSIVITY[matId]?.e ?? "unknown",
+      radiationFluxKWm2: T >= 200 ? +(blackbodyFlux(T) / 1000).toFixed(1) : 0 };
+    cite(r, "nist", "crc", "asm", "incropera", "stefan");
+    if (typeof warmKJ === "number") unc(r, "warm1kgFrom20CkJ", warmKJ, UNCERTAINTY.meltEnergy.rel!, "c ±10%, Lf stacked");
+    if (typeof meltKJ === "number") unc(r, "melt1kgFrom20CkJ", meltKJ, UNCERTAINTY.meltEnergy.rel!, "c ±10%, Lf stacked");
+    if (typeof heatS === "number") unc(r, "timeToHeat1kgS", heatS, UNCERTAINTY.heatTime.rel!, "h ±50% dominates — order of magnitude, not a promise");
+    unc(r, "tempC", T, 0, "exact input");
+    if (mat.meltC !== undefined) unc(r, "meltC", mat.meltC, UNCERTAINTY.meltC.abs! / mat.meltC, "alloy shift ±15 K");
+    if (T >= 800) {
+      const em = EMISSIVITY[matId]?.e ?? 0.9;
+      reason(r, "REAL", 0.85, `Radiation rules here: a surface at ${T}°C sheds σT⁴ ≈ ${(blackbodyFlux(T) / 1000).toFixed(0)} kW/m² (× ε=${em} for ${mat.name}) — convection-only heating times are upper bounds; the sim integrates both.`);
+    }
+    if (mat.meltC !== undefined && T >= mat.meltC) reason(r, "REAL", 0.98, `${mat.name} melts at ${mat.meltC}°C — at ${T}°C it is liquid. You would watch it puddle.${typeof meltKJ === "number" ? ` Melting 1 kg from 20°C costs ~${meltKJ} kJ (sensible + fusion).` : ""}${typeof heatS === "number" ? ` A 1 kg sphere reaches melting range in ~${heatS >= 3600 ? `${(heatS / 3600).toFixed(1)} h` : heatS >= 120 ? `${(heatS / 60).toFixed(0)} min` : `${heatS} s`} in ${heatHow} — then fusion soaks extra power at constant T.` : ""}`);
+    else if (mat.ignitionC !== undefined && T >= mat.ignitionC) reason(r, "REAL", 0.95, `${mat.name} ignites at ${mat.ignitionC}°C — at ${T}°C it burns.${typeof warmKJ === "number" ? ` Warming 1 kg from 20°C to ${T}°C takes ~${warmKJ} kJ.` : ""}${typeof heatS === "number" ? ` Time to temperature: ~${heatS} s in ${heatHow}.` : ""}`);
+    else if (mat.meltC !== undefined) reason(r, "NOT REAL", 0.95, `${mat.name} needs ${mat.meltC}°C to melt; ${T}°C only warms it. No melting. No fire.${typeof warmKJ === "number" ? ` (That warming soaks ~${warmKJ} kJ per kg.)` : ""}`);
     else reason(r, "MIXED", 0.5, `No melt/ignition data for ${mat.name} — cannot render thermal verdict.`);
+    return r;
+  }
+
+  // 2b. CAPACITY — "how much water does a 1 m cube container hold".
+  // Interior volume × fluid density: a report, not a splash.
+  if (/\b(hold|holds|holding|capacity|volume|litre|liter|litres|liters|gallon|report|fit|fits|contain|contains|store|stores)\b/.test(p) &&
+      (/\b(container|vessel|tank|barrel|bucket|bin|tub|basin|tray|reservoir|beaker|cup|mug|pot|drum|bottle|jar|box|cube|pool|cistern)\b/.test(p) || /fill|pour/.test(p))) {
+    const r = fresh(input, envName);
+    const lens: { value: number; unit: string; index: number }[] = [];
+    const lr = /(\d+(?:\.\d+)?)\s?(mm|cm|meter|metre|meters|metres|km|ft|in|m)\b/g;
+    const LU: Record<string, number> = { mm: 0.001, cm: 0.01, m: 1, km: 1000, ft: 0.3048, in: 0.0254 };
+    let lm: RegExpExecArray | null;
+    while ((lm = lr.exec(p))) {
+      const u = lm[2].startsWith("meter") || lm[2].startsWith("metre") ? "m" : lm[2];
+      lens.push({ value: parseFloat(lm[1]), unit: u, index: lm.index });
+    }
+    const cueIdx: number[] = [];
+    for (const w of ["container", "vessel", "tank", "box", "cube", "size", "sized", "side", "height", "tall", "high", "wide", "diameter", "across", "litre", "liter"]) {
+      let qi = p.indexOf(w);
+      while (qi !== -1) { cueIdx.push(qi); qi = p.indexOf(w, qi + 1); }
+    }
+    const near = lens.filter((L) => cueIdx.some((c) => Math.abs(L.index - c) < 24));
+    const pick = near[0] ?? lens[0] ?? null;
+    if (!pick) {
+      reason(r, "MIXED", 0.4, "Name a container size: 'a 1 meter cube container' (side, diameter, or height).");
+      return r;
+    }
+    const s = pick.value * (LU[pick.unit] ?? 1);
+    const spherical = /\b(sphere|ball|orb|globe|bead)\b/.test(p);
+    const V = spherical ? (4 / 3) * Math.PI * (s / 2) ** 3 : s ** 3;
+    const L = V * 1000;
+    const gal = L / 3.78541;
+    const f = FLUIDS[fluidId];
+    const rho = f.density;
+    const kg = rho !== undefined ? V * rho : null;
+    r.measurements = {
+      containerShape: spherical ? "sphere" : "cube", sideM: +s.toFixed(3),
+      internalVolumeM3: +V.toFixed(4), capacityL: +L.toFixed(1), capacityUSGal: +gal.toFixed(1),
+      fluid: f.name, fluidMassKg: kg !== null ? +kg.toFixed(1) : "unknown",
+    };
+    cite(r, "nist", "unesco");
+    unc(r, "capacityL", L, 0.04, "dimension tolerance + density spread");
+    if (kg !== null) unc(r, "fluidMassKg", kg, UNCERTAINTY.density.rel!, "fluid density spread");
+    const shapeNote = spherical ? `${s} m sphere (diameter)` : `${s} m cube (per side)`;
+    reason(r, "REAL", 0.95, `Interior: a ${shapeNote} encloses ${V.toFixed(V < 0.01 ? 4 : 3)} m³.`);
+    reason(r, "REAL", 0.95, `Capacity: ≈${L >= 100 ? L.toFixed(0) : L.toFixed(1)} L (≈${gal >= 100 ? gal.toFixed(0) : gal.toFixed(1)} US gal) to the brim.`);
+    if (kg !== null) {
+      const like = kg >= 800 ? "about a small car" : kg >= 60 ? "about an adult human" : kg >= 8 ? "about a bowling ball" : "about a bag of flour";
+      reason(r, "REAL", 0.9, `Filled with ${f.name}: ≈${kg >= 100 ? kg.toFixed(0) : kg.toFixed(1)} kg — ${like}. The staged tank in front of you is built to this size, filled live.`);
+    } else {
+      reason(r, "MIXED", 0.5, `Volume is exact, but no density data for ${f.name} — mass UNKNOWN, viscosity drag only.`);
+    }
     return r;
   }
 
@@ -109,24 +226,112 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const b = w.spawn({ shape: "box", material: matId, sizeM: 1, pos: { x: 0, y: 5, z: 0 } });
     w.run(4);
     r.measurements = { bodyDensity: mat.density, fluidDensity: f.density ?? "unknown", viscosityPas: f.viscosity, restY: +b.pos.y.toFixed(2) };
+    cite(r, "unesco", "nist");
+    unc(r, "bodyDensity", mat.density, UNCERTAINTY.density.rel!, "alloy/grade spread");
     const v = buoyancyVerdict(mat.density, f.density, mat.name, f.name);
     reason(r, v.includes("NOT REAL") ? "NOT REAL" : v.includes("UNKNOWN") ? "MIXED" : "REAL", 0.9, v + ` Simulated 4 s: rest height ${b.pos.y.toFixed(2)} m.`);
     return r;
   }
 
-  // 4. SCRATCH verdicts (Mohs).
-  if (/scratch|cut|chisels?|mine|pickaxe|tool/.test(p)) {
-    const r = fresh(input, envName);
-    const found = MOHS_LADDER.filter(([name]) => p.includes(name)).map(([, v]) => v);
-    const toolMohs = mat.mohs ?? found[0] ?? NaN;
-    const tgtMohs = found.length > (mat.mohs !== undefined ? 0 : 1)
-      ? found[found.length - 1] : (mat.mohs !== undefined ? (found[0] ?? NaN) : NaN);
-    if (Number.isNaN(toolMohs) || Number.isNaN(tgtMohs)) {
-      reason(r, "MIXED", 0.4, "Need two named minerals/materials (e.g. 'can steel scratch quartz').");
+  // 3b. COMPARISON — "steel vs titanium: which is stronger", "is gold denser than lead".
+  // Table-order-free: both sides are read by position, every axis with data is judged.
+  {
+    const vsM = p.match(/(.+?)\s+(?:vs\.?|versus|v\.?)\s+(.+)/);
+    const whichM = p.match(/which.+?(stronger|weaker|harder|softer|denser|heavier|lighter|hotter|tougher|strongest|hardest|densest|heaviest)/);
+    const thanM = p.match(/is\s+(\w+)\s+(stronger|harder|denser|heavier|hotter|tougher)\s+than\s+(\w+)/);
+    const findMat = (s: string): string | null => {
+      for (const k of Object.keys(MATERIALS)) {
+        if (s.includes(k) || s.includes(MATERIALS[k].name.toLowerCase())) return k;
+      }
+      for (const [alias, id] of Object.entries(MAT_ALIAS)) {
+        if (s.includes(alias) && MATERIALS[id]) return id;
+      }
+      return null;
+    };
+    let aId: string | null = null, bId: string | null = null;
+    if (vsM) { aId = findMat(vsM[1]); bId = findMat(vsM[2]); }
+    else if (thanM) { aId = findMat(thanM[1]); bId = findMat(thanM[3]); }
+    else if (whichM) {
+      const ids: string[] = [];
+      for (const k of Object.keys(MATERIALS)) {
+        if (p.includes(k) || p.includes(MATERIALS[k].name.toLowerCase())) ids.push(k);
+      }
+      if (ids.length >= 2) { aId = ids[0]; bId = ids[1]; }
+    }
+    if (aId && bId && aId !== bId) {
+      const r = fresh(input, envName);
+      const A = MATERIALS[aId], B = MATERIALS[bId];
+      const strOf = (m: (typeof MATERIALS)[string]): number | null => m.ultimateMpa ?? m.tensileMpa ?? m.yieldMpa ?? null;
+      const sA = strOf(A), sB = strOf(B);
+      r.measurements = {
+        a: A.name, b: B.name,
+        strengthMpaA: sA ?? "unknown", strengthMpaB: sB ?? "unknown",
+        mohsA: A.mohs ?? "unknown", mohsB: B.mohs ?? "unknown",
+        densityA: A.density, densityB: B.density,
+        meltCA: A.meltC ?? "unknown", meltCB: B.meltC ?? "unknown",
+      };
+      cite(r, "crc", "asm", "nist");
+      unc(r, "densityA", A.density, UNCERTAINTY.density.rel!, "grade spread");
+      unc(r, "densityB", B.density, UNCERTAINTY.density.rel!, "grade spread");
+      const wins: string[] = [];
+      if (sA !== null && sB !== null) {
+        const w = sA === sB ? "tie" : sA > sB ? A.name : B.name;
+        wins.push(`strength: ${w} (${sA} vs ${sB} MPa)`);
+        reason(r, "REAL", 0.95, `Strength: ${A.name} ${sA} vs ${B.name} ${sB} MPa — ${w === "tie" ? "even match" : `${w} wins`}.`);
+      }
+      if (A.mohs !== undefined && B.mohs !== undefined) {
+        const w = A.mohs === B.mohs ? "tie" : A.mohs > B.mohs ? A.name : B.name;
+        wins.push(`hardness: ${w} (Mohs ${A.mohs} vs ${B.mohs})`);
+        reason(r, "REAL", 0.95, `Hardness: ${A.name} Mohs ${A.mohs} vs ${B.name} Mohs ${B.mohs} — ${w === "tie" ? "mutual abrasion only" : `${w} scratches the other`}.`);
+      }
+      {
+        const w = A.density === B.density ? "tie" : A.density > B.density ? A.name : B.name;
+        wins.push(`density: ${w} (${A.density} vs ${B.density} kg/m³)`);
+        reason(r, "REAL", 0.95, `Density: ${A.name} ${A.density} vs ${B.name} ${B.density} kg/m³ — ${w === "tie" ? "identical" : `${w} is denser and sinks first in any fluid`}.`);
+      }
+      if (A.meltC !== undefined && B.meltC !== undefined) {
+        const w = A.meltC === B.meltC ? "tie" : A.meltC > B.meltC ? A.name : B.name;
+        wins.push(`heat: ${w} (${A.meltC} vs ${B.meltC}°C)`);
+        reason(r, "REAL", 0.95, `Heat: ${A.name} melts ${A.meltC} vs ${B.name} melts ${B.meltC}°C — ${w === "tie" ? "same limit" : `${w} survives hotter`}.`);
+      }
+      if (!wins.length) {
+        reason(r, "MIXED", 0.4, `No comparable data for ${A.name} vs ${B.name} on any axis.`);
+      }
       return r;
     }
-    const v = mohsVerdict(toolMohs, tgtMohs, "tool", "target");
-    r.measurements = { toolMohs, targetMohs: tgtMohs };
+  }
+
+  // 4. SCRATCH verdicts (Mohs). Roles come from WORD ORDER: the first named
+  // material is the tool, the last is the target ("quartz scratches glass" ≠ reverse).
+  if (/scratch|cut|chisels?|mine|pickaxe|tool/.test(p)) {
+    const r = fresh(input, envName);
+    const hits: { idx: number; name: string; mohs: number }[] = [];
+    for (const k of Object.keys(MATERIALS)) {
+      const mo = MATERIALS[k].mohs;
+      if (mo === undefined) continue;
+      for (const w of [k, MATERIALS[k].name.toLowerCase()]) {
+        let i = p.indexOf(w);
+        while (i !== -1) { hits.push({ idx: i, name: MATERIALS[k].name, mohs: mo }); i = p.indexOf(w, i + 1); }
+      }
+    }
+    for (const [lname, lv] of MOHS_LADDER) {
+      let i = p.indexOf(lname);
+      while (i !== -1) { hits.push({ idx: i, name: lname, mohs: lv }); i = p.indexOf(lname, i + 1); }
+    }
+    hits.sort((a, b) => a.idx - b.idx);
+    const order: { name: string; mohs: number }[] = [];
+    const seen = new Set<string>();
+    for (const h of hits) {
+      if (!seen.has(h.name)) { seen.add(h.name); order.push({ name: h.name, mohs: h.mohs }); }
+    }
+    if (order.length < 2) {
+      reason(r, "MIXED", 0.4, "Need two named hard materials (e.g. 'can steel scratch quartz').");
+      return r;
+    }
+    const tool = order[0], tgt = order[order.length - 1];
+    const v = mohsVerdict(tool.mohs, tgt.mohs, tool.name, tgt.name);
+    r.measurements = { toolMohs: tool.mohs, targetMohs: tgt.mohs, tool: tool.name, target: tgt.name };
+    cite(r, "crc");
     reason(r, v.includes("NOT REAL") ? "NOT REAL" : "REAL", 0.95, v);
     return r;
   }
@@ -137,9 +342,15 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const kmM = p.match(/(\d+(?:\.\d+)?)\s?km/);
     const mM = p.match(/(\d+(?:\.\d+)?)\s?m(?!\/s)/);
     const distM = kmM ? parseFloat(kmM[1]) * 1000 : mM ? parseFloat(mM[1]) : 1000;
-    const delay = soundDelay(distM, PHYSICS.SOUND_AIR);
-    r.measurements = { distM, soundDelayS: +delay.toFixed(2) };
-    reason(r, "REAL", 0.95, `At ${distM} m you see the flash first and hear it ${delay.toFixed(1)} s later (343 m/s).`);
+    const cAir = planet.tempC !== null ? soundSpeed(planet.tempC) : PHYSICS.SOUND_AIR;
+    const delay = soundDelay(distM, cAir);
+    r.measurements = { distM, soundDelayS: +delay.toFixed(2), soundSpeedMs: +cAir.toFixed(1) };
+    cite(r, "nist");
+    unc(r, "soundDelayS", delay, UNCERTAINTY.soundDelay.rel!, "air temperature ±10°C");
+    reason(r, "REAL", 0.95, `At ${distM} m you see the flash first and hear it ${delay.toFixed(1)} s later (sound ${cAir.toFixed(0)} m/s at ${planet.tempC ?? 20}°C — c grows with √T).`);
+    if (planet.pressureAtm !== null && planet.pressureAtm < 0.05) {
+      reason(r, "MIXED", 0.6, `Composition gap: this uses dry-AIR sound; ${planet.name}'s thin CO₂ air carries sound near ~227 m/s at these temperatures — treat the delay as order-of-magnitude there.`);
+    }
     for (const [name, vel] of Object.entries(EXPLOSIVES)) {
       if (p.includes(name) || p.includes("tnt") && name === "tnt") {
         reason(r, "REAL", 0.9, `${name.toUpperCase} detonates at ${vel} m/s: ${explosiveClass(vel)}.`);
@@ -160,23 +371,42 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const h = parseFloat(hM[1]);
     const v = fallSurvival(h, FALL_ODDS);
     r.measurements = { heightM: h, note: "LD50 ≈ 12 m" };
+    cite(r, "osha");
     reason(r, v.includes("NOT REAL") ? "NOT REAL" : v.includes("MIXED") || v.includes("coin flip") ? "MIXED" : "REAL", 0.9, v);
     return r;
   }
 
   // 6. THROW / SHOOT / LAUNCH — ballistic verdict + simulated arc.
-  const velM = p.match(/(\d+(?:\.\d+)?)\s?m\/s/);
+  // Understands m/s, km/s, km/h, mph, ft/s, knots, Mach N, and phrases
+  // ("speed of light", "supersonic", "like a bullet"); heights in m/ft/mi.
+  const velM = p.match(/(\d+(?:\.\d+)?)\s?(km\/s|ft\/s|cm\/s|mm\/s|km\/h|m\/s|kph|mph|fps|knots|knot|kn)\b/);
+  const VEL2MS: Record<string, number> = {
+    "m/s": 1, "km/s": 1000, "ft/s": 0.3048, "cm/s": 0.01, "mm/s": 0.001,
+    "km/h": 1 / 3.6, kph: 1 / 3.6, mph: 0.44704, fps: 0.3048,
+    knots: 0.514444, knot: 0.514444, kn: 0.514444,
+  };
+  const machM = p.match(/\bmach\s?(\d+(?:\.\d+)?)/);
   if (/throw|shoot|launch|fire|projectile|jump|fall|drop/.test(p) && !/laser|lase/.test(p)) {
     const r = fresh(input, envName);
-    const v0 = velM ? parseFloat(velM[1]) : 0;
-    const hM = p.match(/from\s(\d+(?:\.\d+)?)\s?m|(\d+(?:\.\d+)?)\s?m\s(high|tall|drop|fall)/);
-    const h0 = hM ? parseFloat(hM[1] ?? hM[2]) : 10;
-    const angM = p.match(/(\d+(?:\.\d+)?)\s?(degrees|°)/);
-    const ang = angM ? parseFloat(angM[1]) : 45;
+    let v0 = velM ? parseFloat(velM[1]) * (VEL2MS[velM[2]] ?? 1) : 0;
+    let velNote = velM && velM[2] !== "m/s" ? `${velM[1]}${velM[2]} = ${v0.toFixed(1)} m/s. ` : "";
+    if (machM) { v0 = parseFloat(machM[1]) * 343; velNote = `Mach ${machM[1]} ≈ ${v0.toFixed(0)} m/s. `; }
+    else if (/\bspeed of light\b|\blightspeed\b|\blight speed\b/.test(p)) { v0 = PHYSICS.C; velNote = `speed of light c = 299,792,458 m/s (relativistic — staged Newtonian, illustrative). `; }
+    else if (/\bhypersonic\b/.test(p)) { v0 = 1700; velNote = "hypersonic ≈ 1,700 m/s. "; }
+    else if (/\bsupersonic\b|\bsound barrier\b/.test(p)) { v0 = 400; velNote = "supersonic ≈ 400 m/s. "; }
+    else if (/\blike a bullet\b|\bbullet\b|\brifle\b/.test(p)) { v0 = 900; velNote = "rifle bullet ≈ 900 m/s. "; }
+    else if (/\bcannon\b/.test(p)) { v0 = 300; velNote = "cannon ≈ 300 m/s. "; }
+    const hM = p.match(/from\s(\d+(?:\.\d+)?)\s?(km|m|ft|mi)?|(\d+(?:\.\d+)?)\s?(km|m|ft|mi)\s(high|tall|drop|fall|altitude)/);
+    const LEN2M: Record<string, number> = { m: 1, km: 1000, ft: 0.3048, mi: 1609.34 };
+    const hRaw = hM ? parseFloat(hM[1] ?? hM[3]) : 10;
+    const hUnit = (hM ? (hM[2] ?? hM[4] ?? "m") : "m") as string;
+    const h0 = Math.min(86000, hRaw * (LEN2M[hUnit] ?? 1));
+    const angM = p.match(/(\d+(?:\.\d+)?)\s?(degrees?|deg|°)/);
+    const ang = angM ? parseFloat(angM[1]) : /\bstraight up\b|\bvertical\b/.test(p) ? 90 : /\bflat\b|\bhorizontal\b/.test(p) ? 5 : 45;
     const w = new EngineWorld();
     w.env.gravity = planet.gravity;
     w.env.airDensity = planet.pressureAtm !== null && planet.pressureAtm < 0.01 ? 0.001 : PHYSICS.AIR_DENSITY;
-    const altM = p.match(/altitude\s(\d+(?:\.\d+)?)\s?m/);
+    const altM = p.match(/altitude\s(\d+(?:\.\d+)?)\s?m/) ?? p.match(/(\d+(?:\.\d+)?)\s?m\saltitude/);
     if (altM) w.env.airDensity = altitudeDensity(parseFloat(altM[1]));
     const b = w.spawn({
       shape: "sphere", material: matId, sizeM: 0.5,
@@ -199,10 +429,34 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
       terminalVms: +terminalVelocity(b.massKg, b.dragCd, b.areaM2, w.env.airDensity).toFixed(1),
       broken: b.broken,
     };
+    cite(r, "isa", "nist");
+    unc(r, "simRangeM", range, UNCERTAINTY.range.rel!, "drag + Cd spread");
+    unc(r, "vacuumRangeM", vacRange, UNCERTAINTY.gravity.rel!, "g variation");
+    unc(r, "terminalVms", terminalVelocity(b.massKg, b.dragCd, b.areaM2, w.env.airDensity), UNCERTAINTY.terminalV.rel!, "CdA ±20%");
+    unc(r, "airDensity", w.env.airDensity, 0.02, "ISA band interpolation");
+    // weaken gravity with altitude on high drops — the sim flies constant-g.
+    if (h0 > 10000 && planet.radiusM) {
+      const gTop = gravityAt(planet.gravity, planet.radiusM, h0);
+      r.measurements.gravityAtStart = +gTop.toFixed(2);
+      unc(r, "gravityAtStart", gTop, UNCERTAINTY.gravity.rel!, "spherical assumption");
+      reason(r, "REAL", 0.8, `High drop: gravity at release is ${gTop.toFixed(2)} m/s² vs ${planet.gravity} surface — the sim flies constant-g, so treat fall time as ±5% above 10 km.`);
+    }
+    // Relativity check: Newton is fine until ~10% of light speed, then it lies.
+    if (v0 > 0.01 * PHYSICS.C) {
+      const g = lorentz(v0);
+      const relJ = relKineticJ(b.massKg, v0);
+      const newJ = 0.5 * b.massKg * v0 * v0;
+      r.measurements.lorentzGamma = +g.toFixed(3);
+      r.measurements.relativisticKEJ = +relJ.toExponential(2) as unknown as number;
+      r.measurements.newtonianKEJ = +newJ.toExponential(2) as unknown as number;
+      unc(r, "lorentzGamma", g, 0, "exact function of v");
+      reason(r, "REAL", 0.9, `RELATIVITY: at ${(v0 / PHYSICS.C * 100).toFixed(1)}% of light speed γ=${g.toFixed(3)} — Newton says ${(newJ).toExponential(2)} J, Einstein says ${(relJ).toExponential(2)} J. The arc above is Newtonian and illustrative; the energy books must use γ.`);
+      cite(r, "nist");
+    }
     r.events = b.events;
-    if (b.broken) reason(r, "REAL", 0.9, `It does NOT survive: ${b.events[b.events.length - 1]}`);
-    else if (v0 && range < vacRange * 0.5) reason(r, "REAL", 0.85, `Short of vacuum range (${vacRange.toFixed(0)} m → ${range.toFixed(0)} m): drag is eating it alive. Games that ignore this are NOT REAL.`);
-    else reason(r, "REAL", 0.85, `Lands ${range.toFixed(1)} m out, intact. Numbers above — check any game against them.`);
+    if (b.broken) reason(r, "REAL", 0.9, `${velNote}It does NOT survive: ${b.events[b.events.length - 1]}`);
+    else if (v0 && range < vacRange * 0.5) reason(r, "REAL", 0.85, `${velNote}Short of vacuum range (${vacRange.toFixed(0)} m → ${range.toFixed(0)} m): drag is eating it alive. Games that ignore this are NOT REAL.`);
+    else reason(r, "REAL", 0.85, `${velNote}Lands ${range.toFixed(1)} m out, intact. Numbers above — check any game against them.`);
     return r;
   }
 
@@ -238,6 +492,7 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const e = ELECTRICAL[key];
     const v = electroVerdict(e.conductivity, e.breakdownMVm, e.name);
     r.measurements = { conductivitySm: e.conductivity, breakdownMVm: e.breakdownMVm, volts, certainty: e.certainty };
+    cite(r, "crc");
     const holds = e.conductivity < 1e3 && volts < e.breakdownMVm * 1e6;
     reason(r, "REAL", 0.92, v + (e.conductivity >= 1e3
       ? ` At ${volts} V it arcs and flows.`
@@ -270,6 +525,7 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const mins = CORROSION_MIN[acidId][targetKey];
     const v = corrosionVerdict(mins, acid.name, targetKey === "tissue" ? "flesh" : mat.name);
     r.measurements = { acid: acid.name, ph: acid.ph, minutesToDestroy10mm: mins >= IMMUNE_MIN ? "immune" : mins };
+    cite(r, "crc");
     reason(r, mins >= IMMUNE_MIN ? "REAL" : "NOT REAL", 0.9, v + (mins >= IMMUNE_MIN ? " It survives." : " It does not survive."));
     return r;
   }
@@ -286,6 +542,7 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const o = OPTICS[key];
     const { bendDeg, note } = snellBend(o.n);
     r.measurements = { medium: o.name, refractiveIndex: o.n, dielectricConstant: o.epsilon, bendDegFrom45: +bendDeg.toFixed(1) };
+    cite(r, "schott", "nist");
     reason(r, "REAL", 0.93, `Laser through ${o.name}: ${note}. High εr=${o.epsilon} also stores charge well.`);
     return r;
   }
@@ -304,6 +561,8 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const pr = ROLLING[pairId];
     const d = rollingStop(v0, pr.crr, planet.gravity);
     r.measurements = { pair: pr.name, crr: pr.crr, v0ms: v0, stopDistanceM: +d.toFixed(1) };
+    cite(r, "sae");
+    unc(r, "stopDistanceM", d, 0.15, "c_rr surface variance");
     reason(r, "REAL", 0.9, `Coasting at ${v0} m/s on ${pr.name} (c_rr=${pr.crr}) rolls ~${d.toFixed(0)} m before stopping.`);
     return r;
   }
@@ -325,10 +584,34 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const dM = p.match(/(\d+(?:\.\d+)?)\s?m(?!\/s)/);
     const dose = doseAt(iso.doseUSvH, kgM ? parseFloat(kgM[1]) : 1, dM ? parseFloat(dM[1]) : 1);
     r.measurements = { isotope: iso.name, halfLifeS: iso.halfLifeS, doseUSvH: +dose.toFixed(2) };
+    cite(r, "iaea");
+    unc(r, "doseUSvH", dose, UNCERTAINTY.dose.rel!, "point-source, no shielding");
     if (dose >= 1000) reason(r, "NOT REAL", 0.97, `${dose.toFixed(0)} μSv/h — lethal within the hour. No unshielded handling.`);
     else if (dose >= 10) reason(r, "MIXED", 0.85, `${dose.toFixed(1)} μSv/h — dangerous; minutes only, then shielding.`);
     else if (dose >= 1) reason(r, "REAL", 0.85, `${dose.toFixed(2)} μSv/h — elevated, brief handling only.`);
     else reason(r, "REAL", 0.9, `${dose.toFixed(2)} μSv/h — near background, safe to stand by.`);
+    return r;
+  }
+
+  // 13b. ORBIT / ESCAPE — circular orbit velocity, period, escape velocity.
+  if (/orbit|revolve|circle|circular|escape velocity|escape speed|satellite|space station/.test(p) && planet.mu && planet.radiusM) {
+    const r = fresh(input, envName);
+    let altM = 400000; // default: low orbit, ISS-style
+    const m1 = p.match(/(\d+(?:\.\d+)?)\s?(km|m)\b.*?(orbit|altitude|high|above)/);
+    const m2 = p.match(/(orbit|altitude).*?(\d+(?:\.\d+)?)\s?(km|m)\b/);
+    if (m1) altM = parseFloat(m1[1]) * (m1[2] === "m" ? 1 : 1000);
+    else if (m2) altM = parseFloat(m2[2]) * (m2[3] === "m" ? 1 : 1000);
+    const ov = orbitVelocity(planet.mu, planet.radiusM, altM);
+    const period = orbitPeriodS(planet.mu, planet.radiusM, altM);
+    const esc = escapeVelocity(planet.mu, planet.radiusM);
+    r.measurements = { altitudeM: altM, orbitVelocityMs: +ov.toFixed(0), orbitPeriodMin: +(period / 60).toFixed(1), escapeVelocityKms: +(esc / 1000).toFixed(2) };
+    cite(r, "jpl");
+    unc(r, "orbitVelocityMs", ov, UNCERTAINTY.orbitV.rel!, "mu + spherical assumption");
+    unc(r, "orbitPeriodMin", period / 60, UNCERTAINTY.orbitV.rel!, "mu + spherical assumption");
+    unc(r, "escapeVelocityKms", esc / 1000, UNCERTAINTY.orbitV.rel!, "mu + spherical assumption");
+    reason(r, "REAL", 0.95, `Circular orbit ${(altM / 1000).toFixed(0)} km over ${planet.name}: ${ov.toFixed(0)} m/s, one lap every ${(period / 60).toFixed(0)} min. Slower falls back, faster escapes the circle.`);
+    if (/escape/.test(p)) reason(r, "REAL", 0.95, `Escape from ${planet.name}: ${(esc / 1000).toFixed(2)} km/s at the surface — the flat-plane game cannot show this; the number is the truth.`);
+    else reason(r, "REAL", 0.7, `Honest limit: the game world is a flat plane — orbits are closed-form numbers, not flown paths.`);
     return r;
   }
 
@@ -342,6 +625,8 @@ export function experience(input: string | ScenarioDesc): ExperienceResult {
     const g = GASTOX[gasId];
     const v = toxicityTier(ppm, g, g.name);
     r.measurements = { gas: g.name, ppm, lethalPpm: g.lethalPpm };
+    cite(r, "osha");
+    unc(r, "lethalPpm", g.lethalPpm, UNCERTAINTY.toxicity.rel!, "individual variance");
     reason(r, v.includes("NOT") ? "NOT REAL" : "REAL", 0.9, v);
     return r;
   }
@@ -366,39 +651,64 @@ export function runScenario(prompt: string, s: ScenarioDesc): ExperienceResult {
       shape: d.shape, material: d.material, sizeM: d.sizeM,
       pos: { x: 0, y: d.heightM ?? 10, z: 0 }, vel: d.vel ? { x: d.vel[0], y: d.vel[1], z: d.vel[2] } : undefined,
       tempC: d.tempC, dragProfile: d.dragProfile,
+      ghost: d.ghost, massOverrideKg: d.massKg,
     }));
   const n = Math.ceil((s.durationS ?? 8) * 120);
+  r.traces = {};
+  for (const bd of bodies) r.traces[bd.id] = [];
   for (let i = 0; i < n; i++) {
     w.step(1 / 120);
     if (i % 120 === 0) {
+      for (const bd of bodies) {
+        r.traces[bd.id].push({ t: +w.time.toFixed(1), y: +bd.pos.y.toFixed(2), v: +Math.hypot(bd.vel.x, bd.vel.y, bd.vel.z).toFixed(1), tempC: +bd.tempC.toFixed(1) });
+      }
       const b = bodies[0];
       r.trace.push({ t: +w.time.toFixed(1), y: +b.pos.y.toFixed(2), v: +Math.hypot(b.vel.x, b.vel.y, b.vel.z).toFixed(1), tempC: +b.tempC.toFixed(1) });
     }
     if (bodies.every((b) => b.broken || (b.pos.y <= (b.shape === "sphere" ? b.radiusM : b.halfM!.y) + 0.01 && Math.hypot(b.vel.x, b.vel.y, b.vel.z) < 0.3))) break;
   }
   const b = bodies[0];
+  const impactV = +Math.hypot(b.vel.x, b.vel.y, b.vel.z).toFixed(1);
   r.measurements = {
     bodies: bodies.length, simTimeS: +w.time.toFixed(2),
-    impactVms: +Math.hypot(b.vel.x, b.vel.y, b.vel.z).toFixed(1),
+    impactVms: impactV,
     broken: b.broken, molten: b.molten, burning: b.burning,
     humanTerminalVms: +humanTerminal().toFixed(1),
   };
-  r.events = w.log;
+  r.measurements.bodyTable = bodies.map((bd) => ({
+    id: bd.id, material: bd.material.name, shape: bd.shape,
+    broken: bd.broken, molten: bd.molten,
+    restY: +bd.pos.y.toFixed(2), speed: +Math.hypot(bd.vel.x, bd.vel.y, bd.vel.z).toFixed(1),
+  }));  r.events = w.log;
+  cite(r, "nist", "isa");
+  unc(r, "impactVms", impactV, UNCERTAINTY.impactV.rel!, "air + 120 Hz step");
+  unc(r, "simTimeS", w.time, 0.01, "fixed-step clock");
   for (const c of s.checks ?? []) {
+    const bb = bodies["body" in c && c.body !== undefined ? c.body : 0] ?? bodies[0];
+    const tag = bodies.length > 1 ? `${bb.material.name} ${bb.shape}: ` : "";
     if (c.kind === "survives-fall") {
-      if (b.broken) reason(r, "REAL", 0.92, `NOT survivable as shown: ${w.log[w.log.length - 1] ?? "shattered"}. Any game where this survives a ${c.heightM} m fall is NOT REAL.`);
-      else reason(r, "REAL", 0.85, `Survives a ${c.heightM} m fall intact — impact within ${b.material.name} limits.`);
+      if (bb.broken) reason(r, "REAL", 0.92, `${tag}NOT survivable as shown: ${bb.events[bb.events.length - 1] ?? w.log[w.log.length - 1] ?? "shattered"}. Any game where this survives a ${c.heightM} m fall is NOT REAL.`);
+      else reason(r, "REAL", 0.85, `${tag}Survives a ${c.heightM} m fall intact — impact within ${bb.material.name} limits.`);
     } else if (c.kind === "floats-in") {
       const f = FLUIDS[c.fluid] ?? FLUIDS.water;
-      const v = buoyancyVerdict(b.material.density, f.density, b.material.name, f.name);
+      const v = buoyancyVerdict(bb.material.density, f.density, bb.material.name, f.name);
       r.measurements.fluid = f.name;
-      reason(r, v.includes("UNKNOWN") ? "MIXED" : "REAL", 0.9, v);
+      reason(r, v.includes("UNKNOWN") ? "MIXED" : "REAL", 0.9, tag + v);
+      // Hot fluids cook: lava doesn't just float things, it melts them.
+      if ((f.tempC ?? 0) >= 500) {
+        const m = bb.material;
+        cite(r, "stefan");
+        if (m.meltC !== undefined && f.tempC! >= m.meltC) reason(r, "REAL", 0.97, `${tag}${f.name} at ${f.tempC}°C melts ${m.name} (${m.meltC}°C) — splash, then liquid. Watch it puddle live.`);
+        else if (m.ignitionC !== undefined && f.tempC! >= m.ignitionC) reason(r, "REAL", 0.95, `${tag}${f.name} at ${f.tempC}°C ignites ${m.name} (${m.ignitionC}°C) — it burns on the surface.`);
+        else if (m.meltC !== undefined) reason(r, "REAL", 0.9, `${tag}${f.name} at ${f.tempC}°C cannot melt ${m.name} (${m.meltC}°C) — it rides the lava intact.`);
+        else reason(r, "MIXED", 0.5, `${tag}No melt data for ${m.name} — its fate in lava is UNKNOWN.`);
+      }
     } else if (c.kind === "scratch") {
       const tool = MATERIALS[c.tool]?.mohs, tgt = MATERIALS[c.target]?.mohs;
       if (tool === undefined || tgt === undefined) reason(r, "MIXED", 0.4, "Unknown Mohs data for one side.");
       else { const v = mohsVerdict(tool, tgt, c.tool, c.target); reason(r, v.includes("NOT REAL") ? "NOT REAL" : "REAL", 0.95, v); }
     } else if (c.kind === "melt-at") {
-      const m = b.material;
+      const m = bb.material;
       if (m.meltC !== undefined && c.tempC >= m.meltC) reason(r, "REAL", 0.97, `${m.name} melts at ${m.meltC}°C; ${c.tempC}°C liquefies it.`);
       else if (m.meltC !== undefined) reason(r, "NOT REAL", 0.95, `${c.tempC}°C cannot melt ${m.name} (${m.meltC}°C).`);
       else reason(r, "MIXED", 0.4, "No melt data.");
@@ -411,6 +721,5 @@ export function runScenario(prompt: string, s: ScenarioDesc): ExperienceResult {
   if (!(s.checks ?? []).length) {
     reason(r, "REAL", 0.7, `Baseline drop-test complete: ${b.broken ? "shattered" : "intact"}. Add checks for verdicts.`);
   }
-  void dragCd; void reposeOk; void REPOSE_DEG;
   return r;
 }

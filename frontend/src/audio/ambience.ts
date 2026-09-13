@@ -9,6 +9,7 @@ export class Ambience {
   private windFilter: BiquadFilterNode | null = null;
   private waterGain: GainNode | null = null;
   private insectGain: GainNode | null = null;
+  private muted = false;
   started = false;
   private noiseBuf: AudioBuffer | null = null;
   start() {
@@ -78,9 +79,18 @@ export class Ambience {
     s.connect(f); f.connect(g); g.connect(this.master);
     s.start(t, Math.random() * 1.5, 0.18);
   }
+  /** M mute: hard silence toggle. Returns the new muted state. */
+  toggleMute(): boolean {
+    this.muted = !this.muted;
+    if (this.ctx && this.master) {
+      this.master.gain.setTargetAtTime(this.muted ? 0 : 0.5, this.ctx.currentTime, 0.05);
+    }
+    return this.muted;
+  }
   // Distant call: simple decaying sine sweep (placeholder for sampled calls).
+  // Currently unused by the frame loop — random phantom cries are worse than silence.
   distantCall(distanceM: number) {
-    if (!this.ctx || !this.master) return;
+    if (!this.ctx || !this.master || this.muted) return;
     const t = this.ctx.currentTime;
     const o = this.ctx.createOscillator(), g = this.ctx.createGain();
     o.type = "sine";

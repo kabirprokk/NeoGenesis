@@ -1,6 +1,14 @@
 // Cinematic first-person controller: walk/run/crouch/swim/climb stubs, subtle weight, no shake spam.
 import * as THREE from "three";
 
+/** True while the user is writing in a text field — game keys must stand down. */
+export function uiHasFocus(e?: Event): boolean {
+  const t = (e?.target ?? document.activeElement) as HTMLElement | null;
+  if (!t) return false;
+  const tag = t.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable;
+}
+
 export interface MoveState { f: boolean; b: boolean; l: boolean; r: boolean; run: boolean; crouch: boolean; jump: boolean }
 
 export class PlayerController {
@@ -13,6 +21,11 @@ export class PlayerController {
   gravity = 12.5;   // set 9.80665 for real Earth (engine-owned games do this)
   maxFall = 54;     // human terminal velocity, m/s
   keys: MoveState = { f: false, b: false, l: false, r: false, run: false, crouch: false, jump: false };
+  /** Hard stop: release every key and kill drift velocity. */
+  stop(): void {
+    this.keys = { f: false, b: false, l: false, r: false, run: false, crouch: false, jump: false };
+    this.vel.set(0, 0, 0);
+  }
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
     this.obj.add(this.pitch);
@@ -21,6 +34,13 @@ export class PlayerController {
   }
   attach(el: HTMLElement) {
     el.addEventListener("click", () => el.requestPointerLock?.());
+    // Clicking into any text field releases all movement keys — no stuck strafe.
+    window.addEventListener("focusin", (e) => {
+      if (uiHasFocus(e)) this.stop();
+    });
+    // Alt+Tab (or any blur) swallows keyup — stop dead instead of drifting forever.
+    window.addEventListener("blur", () => this.stop());
+    document.addEventListener("visibilitychange", () => { if (document.hidden) this.stop(); });
     document.addEventListener("pointerlockchange", () => {});
     document.addEventListener("mousemove", (e) => {
       if (document.pointerLockElement !== el) return;
@@ -38,8 +58,8 @@ export class PlayerController {
         lx = e.clientX; ly = e.clientY;
       }
     });
-    window.addEventListener("keydown", (e) => this.setKey(e.code, true));
-    window.addEventListener("keyup", (e) => this.setKey(e.code, false));
+    window.addEventListener("keydown", (e) => { if (!uiHasFocus(e)) this.setKey(e.code, true); });
+    window.addEventListener("keyup", (e) => { if (!uiHasFocus(e)) this.setKey(e.code, false); });
   }
   private setKey(code: string, on: boolean) {
     if (code === "KeyW" || code === "ArrowUp") this.keys.f = on;

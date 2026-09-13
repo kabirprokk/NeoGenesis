@@ -15,46 +15,67 @@ export interface MaterialDef {
 }
 
 export const MATERIALS: Record<string, MaterialDef> = {
-  aerogel:   { id: "aerogel", name: "Aerogel", density: 1.0, yieldMpa: 0.02, ultimateMpa: 0.04, color: 0xdfe8ee, restitution: 0.1 },
-  styrofoam: { id: "styrofoam", name: "Styrofoam", density: 75, yieldMpa: 0.2, ultimateMpa: 0.4, color: 0xf2f2f2, restitution: 0.3 },
+  aerogel:   { id: "aerogel", name: "Aerogel", density: 1.0, yieldMpa: 0.02, ultimateMpa: 0.04, soundMs: 100, color: 0xdfe8ee, restitution: 0.1 },
+  styrofoam: { id: "styrofoam", name: "Styrofoam", density: 75, yieldMpa: 0.2, ultimateMpa: 0.4, soundMs: 500, color: 0xf2f2f2, restitution: 0.3 },
   oak:       { id: "oak", name: "Oak Wood", density: 750, ignitionC: 300, tensileMpa: 40, yieldMpa: 35, ultimateMpa: 40, youngGpa: 11, poisson: 0.3, mohs: 2.5, soundMs: 3850, muS: 0.4, muK: 0.2, color: 0x7a5230, restitution: 0.4 },
-  water:     { id: "water", name: "Water", density: 1000, meltC: 0, thermalWmK: 0.6, soundMs: 1481, color: 0x1a3a55, restitution: 0 },
-  concrete:  { id: "concrete", name: "Concrete", density: 2400, tensileMpa: 3.5, yieldMpa: 15, ultimateMpa: 4, youngGpa: 30, poisson: 0.2, thermalWmK: 1.0, color: 0x8a8a86, restitution: 0.1 },
+  water:     { id: "water", name: "Water", density: 1000, thermalWmK: 0.6, soundMs: 1481, color: 0x1a3a55, restitution: 0 }, // liquid: melts N/A (ice melts), boils 100
+  concrete:  { id: "concrete", name: "Concrete", density: 2400, tensileMpa: 3.5, yieldMpa: 15, ultimateMpa: 4, youngGpa: 30, poisson: 0.2, thermalWmK: 1.0, soundMs: 3200, color: 0x8a8a86, restitution: 0.1 },
   glass:     { id: "glass", name: "Window Glass", density: 2500, ultimateMpa: 70, thermalWmK: 1.7, mohs: 5.5, soundMs: 4540, color: 0xbfe0e8, restitution: 0.2 },
-  aluminium: { id: "aluminium", name: "Aluminium", density: 2700, meltC: 660.3, yieldMpa: 276, ultimateMpa: 310, thermalWmK: 210, color: 0xc0c4c8, restitution: 0.3 },
-  iron:      { id: "iron", name: "Iron", density: 7874, meltC: 1538, yieldMpa: 50, ultimateMpa: 250, color: 0x6b6f72, restitution: 0.3 },
-  steel:     { id: "steel", name: "Structural Steel", density: 7850, tensileMpa: 400, yieldMpa: 250, ultimateMpa: 400, youngGpa: 200, poisson: 0.3, thermalWmK: 50, mohs: 5.5, soundMs: 5960, color: 0x7d848a, restitution: 0.35 },
-  lead:      { id: "lead", name: "Lead", density: 11340, meltC: 327.5, yieldMpa: 10, ultimateMpa: 18, color: 0x4a4d52, restitution: 0.15 },
-  gold:      { id: "gold", name: "Gold", density: 19300, meltC: 1064, yieldMpa: 20, ultimateMpa: 120, color: 0xd4af37, restitution: 0.2 },
-  copper:    { id: "copper", name: "Copper", density: 8960, meltC: 1085, yieldMpa: 70, ultimateMpa: 220, thermalWmK: 401, color: 0xb87333, restitution: 0.3 },
-  bronze:    { id: "bronze", name: "Bronze", density: 8800, meltC: 913, yieldMpa: 150, ultimateMpa: 300, color: 0xa67c3d, restitution: 0.3 },
-  titanium:  { id: "titanium", name: "Titanium Alloy", density: 4500, meltC: 1668, tensileMpa: 900, yieldMpa: 880, ultimateMpa: 950, color: 0x9aa2ab, restitution: 0.35 },
+  aluminium: { id: "aluminium", name: "Aluminium", density: 2700, meltC: 660.3, yieldMpa: 276, ultimateMpa: 310, thermalWmK: 210, soundMs: 6420, color: 0xc0c4c8, restitution: 0.3 },
+  iron:      { id: "iron", name: "Iron", density: 7874, meltC: 1538, yieldMpa: 50, ultimateMpa: 250, soundMs: 5960, color: 0x6b6f72, restitution: 0.3 },
+  steel:     { id: "steel", name: "Structural Steel", density: 7850, meltC: 1450, tensileMpa: 400, yieldMpa: 250, ultimateMpa: 400, youngGpa: 200, poisson: 0.3, thermalWmK: 50, mohs: 5.5, soundMs: 5960, color: 0x7d848a, restitution: 0.35 },
+  lead:      { id: "lead", name: "Lead", density: 11340, meltC: 327.5, yieldMpa: 10, ultimateMpa: 18, soundMs: 2160, color: 0x4a4d52, restitution: 0.15 },
+  gold:      { id: "gold", name: "Gold", density: 19300, meltC: 1064, yieldMpa: 20, ultimateMpa: 120, soundMs: 3240, color: 0xd4af37, restitution: 0.2 },
+  copper:    { id: "copper", name: "Copper", density: 8960, meltC: 1085, yieldMpa: 70, ultimateMpa: 220, thermalWmK: 401, soundMs: 4760, color: 0xb87333, restitution: 0.3 },
+  bronze:    { id: "bronze", name: "Bronze", density: 8800, meltC: 913, yieldMpa: 150, ultimateMpa: 300, soundMs: 4700, color: 0xa67c3d, restitution: 0.3 },
+  titanium:  { id: "titanium", name: "Titanium Alloy", density: 4500, meltC: 1668, tensileMpa: 900, yieldMpa: 880, ultimateMpa: 950, soundMs: 6070, color: 0x9aa2ab, restitution: 0.35 },
   diamond:   { id: "diamond", name: "Diamond", density: 3510, meltC: 4027, ultimateMpa: 2800, thermalWmK: 2200, mohs: 10, soundMs: 12000, color: 0xcfe8ff, restitution: 0.5 },
   rubber:    { id: "rubber", name: "Rubber", density: 1500, youngGpa: 0.05, poisson: 0.5, yieldMpa: 2, ultimateMpa: 20, soundMs: 60, muS: 1.0, muK: 0.8, color: 0x222222, restitution: 0.85 },
-  teflon:    { id: "teflon", name: "Teflon", density: 2200, yieldMpa: 23, ultimateMpa: 48, muS: 0.04, muK: 0.04, color: 0xe8e8e8, restitution: 0.2 },
-  ice:       { id: "ice", name: "Water Ice", density: 917, meltC: 0, thermalWmK: 2.2, mohs: 2, muS: 0.1, muK: 0.03, color: 0xcfe8f2, restitution: 0.3 },
-  graphite:  { id: "graphite", name: "Carbon/Graphite", density: 2260, mohs: 1.5, color: 0x333336, restitution: 0.2 },
-  tungstenCarbide: { id: "tungstenCarbide", name: "Tungsten Carbide", density: 15600, youngGpa: 550, poisson: 0.2, mohs: 9, color: 0x555558, restitution: 0.3 },
-  carbonFibre: { id: "carbonFibre", name: "Carbon Fibre", density: 1750, tensileMpa: 3500, color: 0x1a1a1e, restitution: 0.4 },
-  bamboo:    { id: "bamboo", name: "Structural Bamboo", density: 600, yieldMpa: 40, ultimateMpa: 120, color: 0x9aa04e, restitution: 0.4 },
-  cork:      { id: "cork", name: "Cork", density: 240, youngGpa: 0.03, poisson: 0, color: 0xb08d57, restitution: 0.2 },
-  soil:      { id: "soil", name: "Loose Soil", density: 1500, color: 0x5a4632, restitution: 0.05 },
-  sand:      { id: "sand", name: "Dry Sand", density: 1600, color: 0xc2a878, restitution: 0.05 },
+  teflon:    { id: "teflon", name: "Teflon", density: 2200, yieldMpa: 23, ultimateMpa: 48, muS: 0.04, muK: 0.04, soundMs: 1400, color: 0xe8e8e8, restitution: 0.2 },
+  ice:       { id: "ice", name: "Water Ice", density: 917, meltC: 0, thermalWmK: 2.2, mohs: 2, muS: 0.1, muK: 0.03, soundMs: 3980, color: 0xcfe8f2, restitution: 0.3 },
+  graphite:  { id: "graphite", name: "Carbon/Graphite", density: 2260, mohs: 1.5, soundMs: 3000, color: 0x333336, restitution: 0.2 },
+  tungstenCarbide: { id: "tungstenCarbide", name: "Tungsten Carbide", density: 15600, youngGpa: 550, poisson: 0.2, mohs: 9, soundMs: 6220, color: 0x555558, restitution: 0.3 },
+  carbonFibre: { id: "carbonFibre", name: "Carbon Fibre", density: 1750, tensileMpa: 3500, soundMs: 8000, color: 0x1a1a1e, restitution: 0.4 },
+  bamboo:    { id: "bamboo", name: "Structural Bamboo", density: 600, yieldMpa: 40, ultimateMpa: 120, soundMs: 5000, color: 0x9aa04e, restitution: 0.4 },
+  cork:      { id: "cork", name: "Cork", density: 240, youngGpa: 0.03, poisson: 0, soundMs: 500, color: 0xb08d57, restitution: 0.2 },
+  soil:      { id: "soil", name: "Loose Soil", density: 1500, soundMs: 300, color: 0x5a4632, restitution: 0.05 },
+  sand:      { id: "sand", name: "Dry Sand", density: 1600, soundMs: 300, color: 0xc2a878, restitution: 0.05 },
+  brass:     { id: "brass", name: "Brass", density: 8500, meltC: 900, yieldMpa: 200, ultimateMpa: 350, thermalWmK: 110, mohs: 4, soundMs: 4700, color: 0xb5a642, restitution: 0.3 },
+  silver:    { id: "silver", name: "Silver", density: 10490, meltC: 961.8, yieldMpa: 55, ultimateMpa: 140, thermalWmK: 429, mohs: 2.5, soundMs: 3650, color: 0xc0c0c0, restitution: 0.3 },
+  nickel:    { id: "nickel", name: "Nickel", density: 8908, meltC: 1455, yieldMpa: 150, ultimateMpa: 400, thermalWmK: 91, mohs: 4, soundMs: 5630, color: 0x8a8d7a, restitution: 0.3 },
+  zinc:      { id: "zinc", name: "Zinc", density: 7140, meltC: 419.5, yieldMpa: 75, ultimateMpa: 150, thermalWmK: 116, soundMs: 4210, color: 0x9aa0a6, restitution: 0.3 },
+  platinum:  { id: "platinum", name: "Platinum", density: 21450, meltC: 1768, yieldMpa: 125, ultimateMpa: 200, thermalWmK: 72, mohs: 4.5, soundMs: 3260, color: 0xd0d0d8, restitution: 0.3 },
+  marble:    { id: "marble", name: "Marble", density: 2700, ultimateMpa: 15, mohs: 3, thermalWmK: 2.5, soundMs: 3800, color: 0xe8e4da, restitution: 0.15 },
+  granite:   { id: "granite", name: "Granite", density: 2750, ultimateMpa: 20, mohs: 6.5, thermalWmK: 2.8, soundMs: 6000, color: 0x7a6f68, restitution: 0.15 },
+  coal:      { id: "coal", name: "Coal", density: 1300, ignitionC: 400, ultimateMpa: 20, soundMs: 2000, color: 0x1a1a1a, restitution: 0.1 },
+  paper:     { id: "paper", name: "Paper", density: 900, ignitionC: 233, ultimateMpa: 30, soundMs: 1000, color: 0xf5f0e1, restitution: 0.2 },
+  clay:      { id: "clay", name: "Clay", density: 1700, ultimateMpa: 5, mohs: 2, soundMs: 1500, color: 0x9c6644, restitution: 0.05 },
+  silicon:   { id: "silicon", name: "Silicon", density: 2330, meltC: 1414, ultimateMpa: 170, youngGpa: 150, thermalWmK: 150, mohs: 7, soundMs: 8430, color: 0x6a6f75, restitution: 0.3 },
+  quartz:    { id: "quartz", name: "Quartz", density: 2650, ultimateMpa: 100, thermalWmK: 8, mohs: 7, soundMs: 5800, color: 0xe8e2d4, restitution: 0.2 },
+  salt:      { id: "salt", name: "Salt (Halite)", density: 2160, meltC: 801, ultimateMpa: 5, mohs: 2.5, soundMs: 4600, color: 0xf5f2ea, restitution: 0.2 },
+  sugar:     { id: "sugar", name: "Sugar", density: 1590, meltC: 186, ultimateMpa: 10, mohs: 2, soundMs: 2000, color: 0xfaf6ee, restitution: 0.2 },
+  chalk:     { id: "chalk", name: "Chalk", density: 2710, ultimateMpa: 10, mohs: 3, thermalWmK: 2, soundMs: 3800, color: 0xf2efe6, restitution: 0.15 },
 };
 
-export interface FluidDef { id: string; name: string; viscosity: number; density?: number }
+export interface FluidDef { id: string; name: string; viscosity: number; density?: number; tempC?: number }
 // Table 7. Density only where the codex or common reference is certain; otherwise
 // viscosity-only drag applies and buoyancy verdicts report "unknown".
+// tempC pins a fluid's temperature (lava erupts at 700–1200°C); fluids without
+// one sit at ambient, so pools track weather and seasons.
 export const FLUIDS: Record<string, FluidDef> = {
   air:      { id: "air", name: "Air", viscosity: 0.000018, density: 1.225 },
   water:    { id: "water", name: "Water", viscosity: 0.001, density: 1000 },
   seawater: { id: "seawater", name: "Sea Water", viscosity: 0.00108, density: 1025 },
   mercury:  { id: "mercury", name: "Mercury", viscosity: 0.00155, density: 13534 },
-  oliveOil: { id: "oliveOil", name: "Olive Oil", viscosity: 0.081 },
-  motorOil: { id: "motorOil", name: "Motor Oil SAE30", viscosity: 0.29 },
-  ketchup:  { id: "ketchup", name: "Ketchup", viscosity: 50 },
-  honey:    { id: "honey", name: "Honey", viscosity: 10.0 },
-  lava:     { id: "lava", name: "Molten Lava", viscosity: 1000 }, // codex range 100–100000; mid, marked approx
+  oliveOil: { id: "oliveOil", name: "Olive Oil", viscosity: 0.081, density: 910 },
+  motorOil: { id: "motorOil", name: "Motor Oil SAE30", viscosity: 0.29, density: 880 },
+  ketchup:  { id: "ketchup", name: "Ketchup", viscosity: 50, density: 1140 },
+  honey:    { id: "honey", name: "Honey", viscosity: 10.0, density: 1420 },
+  lava:     { id: "lava", name: "Molten Lava", viscosity: 1000, density: 2600, tempC: 1000 }, // basaltic eruption mid-range, approx
+  milk:     { id: "milk", name: "Milk", viscosity: 0.003, density: 1030 },
+  blood:    { id: "blood", name: "Blood", viscosity: 0.004, density: 1060 },
+  alcohol:  { id: "alcohol", name: "Ethanol", viscosity: 0.0012, density: 789 },
+  diesel:   { id: "diesel", name: "Diesel Fuel", viscosity: 0.004, density: 850 },
 };
 
 // Table 13 — drag coefficients by profile.

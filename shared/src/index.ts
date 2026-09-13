@@ -1,10 +1,8 @@
 export * from "./era.js";
 export * from "./geo.js";
 export * from "./astro.js";
-export * from "./climate.js";
-export * from "./ecology.js";
 
-// Save/discovery/journal shared shapes (client + server agree here).
+// Save/journal shared shapes (browser-local storage agrees here).
 export interface PlayerSave {
   playerId: string; lat: number; lon: number; alt: number;
   health: number; hunger: number; thirst: number; stamina: number; sleep: number; bodyTempC: number;

@@ -28,10 +28,6 @@ export async function storeSave(save: Record<string, unknown>) {
   writeJson(saveKey(String((save as { playerId: string }).playerId)), save);
 }
 
-export async function loadJournal(playerId: string) {
-  return readJson<Record<string, unknown>[]>(journalKey(playerId)) ?? [];
-}
-
 export async function addJournal(entry: Record<string, unknown>) {
   const pid = String((entry as { playerId: string }).playerId ?? "last-human");
   const list = readJson<Record<string, unknown>[]>(journalKey(pid)) ?? [];

@@ -6,9 +6,11 @@ import { MATERIALS, FLUIDS, DRAG_CD, MOHS_LADDER, EXPLOSIVES, explosiveClass, FR
 import { PLANETS } from "./planets.js";
 import { EngineWorld } from "./world.js";
 import { getModel, spawnModel, MODEL_COUNT, MODEL_CLASSES } from "./models.js";
-import { experience, runScenario } from "./experience.js";
+import { experience, runScenario, verdictCSV } from "./experience.js";
 import { neoParse, neoScenario, neoSamples, neoPatternCount, neoToolFor } from "./neo.js";
-import { terminalVelocity, projectileRange, impact, buoyancyVerdict, soundDelay, slidesOnIncline, reposeOk } from "./physics.js";
+import { terminalVelocity, projectileRange, impact, buoyancyVerdict, soundDelay, slidesOnIncline, reposeOk, heatEnergyJ, heatTimeS, lorentz, relKineticJ, orbitVelocity, escapeVelocity, orbitPeriodS, horizonM, soundSpeed, gravityAt, blackbodyFlux } from "./physics.js";
+import { SPECIFIC_HEAT, UNCERTAINTY, H_CONV, CITATIONS, EMISSIVITY } from "./science.js";
+import { CODEX_VERSION } from "./constants.js";
 
 export type Args = Record<string, string | number | boolean>;
 export interface ToolCtx { world?: EngineWorld }
@@ -83,12 +85,140 @@ export const TOOLS: ToolDef[] = [
     (a) => ({ verdict: reposeOk(REPOSE_DEG[str(a, "material")] ?? [30, 35], num(a, "angleDeg")) })),
   def("explosive-class", "Blast tier for a detonation velocity.", T(["velMs"], [["velMs", "number", "m/s"]]),
     (a) => ({ tier: explosiveClass(num(a, "velMs")) })),
+  def("heat-energy", "Sensible + fusion energy (kJ) to heat/melt a mass of material.", T(["material", "massKg", "fromC", "toC"], [["material", "string", "material id"], ["massKg", "number", "kg"], ["fromC", "number", "start °C"], ["toC", "number", "target °C"]]),
+    (a) => {
+      const th = SPECIFIC_HEAT[str(a, "material")];
+      if (!th) return { error: "unknown thermal data" };
+      const m = num(a, "massKg", 1);
+      const sensibleKJ = heatEnergyJ(m, th.c, num(a, "toC") - num(a, "fromC")) / 1000;
+      const mat = MATERIALS[str(a, "material")];
+      const melts = mat?.meltC !== undefined && num(a, "toC") >= mat.meltC && num(a, "fromC") < mat.meltC;
+      const fusionKJ = melts && th.lf ? m * th.lf : 0;
+      return { material: th.name, specificHeatJkgK: th.c, sensibleKJ: +sensibleKJ.toFixed(1), fusionKJ: +fusionKJ.toFixed(1), totalKJ: +(sensibleKJ + fusionKJ).toFixed(1), melts };
+    }),
+  def("thermal-table", "Specific heat + fusion data for all materials.", T([], []),
+    () => Object.values(SPECIFIC_HEAT).map((t) => ({ id: t.id, cJkgK: t.c, fusionKJkg: t.lf ?? null }))),
+  def("heat-time", "Lumped-capacitance heating time (s) in a convection bath. h dominates: ±50%.", T(["massKg", "material", "areaM2", "h", "tInfC", "t0C", "t1C"], [["massKg", "number", "kg"], ["material", "string", "for specific heat"], ["areaM2", "number", "surface m²"], ["h", "number", "W/m²·K (stillAir 10, furnace 150)"], ["tInfC", "number", "bath °C"], ["t0C", "number", "start °C"], ["t1C", "number", "target °C (< bath)"]]),
+    (a) => {
+      const th = SPECIFIC_HEAT[str(a, "material")];
+      if (!th) return { error: "unknown thermal data" };
+      const t = heatTimeS(num(a, "massKg", 1), th.c, num(a, "areaM2", 1), num(a, "h", 10), num(a, "tInfC"), num(a, "t0C", 20), num(a, "t1C"));
+      return Number.isFinite(t) ? { seconds: +t.toFixed(0), uncertainty: "±50% (h dominates)", model: "lumped capacitance — uniform body temperature assumed" } : { error: "target must be below bath temperature" };
+    }),
+  def("relativity", "Lorentz factor + relativistic vs Newtonian KE at velocity.", T(["vMs", "massKg"], [["vMs", "number", "m/s"], ["massKg", "number", "default 1"]]),
+    (a) => {
+      const v = num(a, "vMs"), m = num(a, "massKg", 1);
+      const g = lorentz(v);
+      return { gamma: +g.toFixed(6), fractionOfC: +(v / PHYSICS.C).toFixed(4), newtonianKJ: +(0.5 * m * v * v / 1000).toFixed(1), relativisticKJ: +(relKineticJ(m, v) / 1000).toFixed(1) };
+    }),
+  def("orbit-velocity", "Circular orbit velocity + period at altitude over a body.", T(["planet", "altitudeM"], [["planet", "string", "body id"], ["altitudeM", "number", "default 400000"]]),
+    (a) => {
+      const p = PLANETS[str(a, "planet", "earth")];
+      if (!p?.mu || !p?.radiusM) return { error: "unknown body" };
+      const alt = num(a, "altitudeM", 400000);
+      return { planet: p.name, altitudeM: alt, velocityMs: +orbitVelocity(p.mu, p.radiusM, alt).toFixed(0), periodMin: +(orbitPeriodS(p.mu, p.radiusM, alt) / 60).toFixed(1) };
+    }),
+  def("escape-velocity", "Escape velocity from a body surface.", T(["planet"], [["planet", "string", "body id"]]),
+    (a) => {
+      const p = PLANETS[str(a, "planet", "earth")];
+      if (!p?.mu || !p?.radiusM) return { error: "unknown body" };
+      return { planet: p.name, escapeMs: +escapeVelocity(p.mu, p.radiusM).toFixed(0) };
+    }),
+  def("horizon", "Distance to the horizon from eye height (spherical Earth default).", T(["eyeM"], [["eyeM", "number", "eye height m"], ["radiusM", "number", "default 6371000"]]),
+    (a) => ({ horizonM: +horizonM(num(a, "eyeM", 1.7), num(a, "radiusM", 6371000)).toFixed(0) })),
+  def("citations", "BibTeX references for the data families behind a verdict.", T([], [["ids", "string", "comma list of cite ids, default all"]]),
+    (a) => {
+      const want = str(a, "ids") ? str(a, "ids").split(",").map((s) => s.trim()) : Object.keys(CITATIONS);
+      return want.filter((id) => CITATIONS[id]).map((id) => {
+        const c = CITATIONS[id];
+        return `@misc{neogenesis_${c.id},\n  title = {${c.title}},\n  publisher = {${c.publisher}},\n  year = {${c.year}},\n  note = {NeoGenesis codex family: ${c.family}. ${c.note}}\n}`;
+      });
+    }),
+  def("uncertainty-table", "Error bars carried by every verdict number.", T([], []), () => UNCERTAINTY),
+  def("csv", "Time-series trace CSV for a prompt (all bodies). Paste into a spreadsheet.", T(["prompt"], [["prompt", "string", "natural-language experiment"]]),
+    (a) => ({ csv: verdictCSV(experience(str(a, "prompt"))) })),
+  def("sound-speed", "Speed of sound in dry air at a temperature.", T(["tempC"], [["tempC", "number", "°C"]]),
+    (a) => ({ soundMs: +soundSpeed(num(a, "tempC", 20)).toFixed(1) })),
+  def("gravity-at", "Surface gravity weakened by altitude over a body.", T(["planet", "altitudeM"], [["planet", "string", "body id"], ["altitudeM", "number", "m"]]),
+    (a) => {
+      const p = PLANETS[str(a, "planet", "earth")];
+      if (!p?.radiusM) return { error: "unknown body" };
+      return { planet: p.name, gravity: +gravityAt(p.gravity, p.radiusM, num(a, "altitudeM", 0)).toFixed(3) };
+    }),
+  def("blackbody", "Radiative flux σT⁴ (W/m²) at a surface temperature.", T(["tempC"], [["tempC", "number", "°C"]]),
+    (a) => ({ fluxWm2: +blackbodyFlux(num(a, "tempC")).toFixed(0) })),
+  def("emissivity-table", "Surface emissivities for radiation heat transfer.", T([], []),
+    () => Object.values(EMISSIVITY).map((e) => ({ id: e.id, emissivity: e.e }))),
+  def("sound-through", "Ultrasonic transit time + impedance through a material slab.", T(["material", "thicknessM"], [["material", "string", "material id"], ["thicknessM", "number", "slab thickness m"]]),
+    (a) => {
+      const m = MATERIALS[str(a, "material")];
+      if (!m?.soundMs) return { error: "no sound-speed data" };
+      const d = num(a, "thicknessM", 0.1);
+      return { material: m.name, soundMs: m.soundMs, transitUs: +(d / m.soundMs * 1e6).toFixed(1), impedanceMRayl: +(m.density * m.soundMs / 1e6).toFixed(2) };
+    }),
+  def("codex-version", "Dataset version + families stamped on every verdict.", T([], []),
+    () => ({ codex: CODEX_VERSION, families: Object.values(CITATIONS).map((c) => c.family) })),
+  def("validate", "Self-certification: the 120 Hz sim vs closed-form answers, with error %.", T([], []),
+    () => {
+      const checks: { name: string; expected: number; got: number; errPct: number; pass: boolean }[] = [];
+      const check = (name: string, expected: number, got: number, tolPct: number) => {
+        const errPct = Math.abs((got - expected) / Math.max(1e-9, expected)) * 100;
+        checks.push({ name, expected: +expected.toFixed(2), got: +got.toFixed(2), errPct: +errPct.toFixed(2), pass: errPct <= tolPct });
+      };
+      // 1. Vacuum projectile: 30 m/s @45° from 10 m must match the analytic arc at first touchdown.
+      {
+        const w = new EngineWorld();
+        w.env.airDensity = 0;
+        const v0 = 30, h0 = 10;
+        const b = w.spawn({ shape: "sphere", material: "steel", sizeM: 0.2,
+          pos: { x: 0, y: h0, z: 0 },
+          vel: { x: v0 * Math.cos(Math.PI / 4), y: v0 * Math.sin(Math.PI / 4), z: 0 }, dragProfile: "sphere" });
+        const vy0 = v0 * Math.sin(Math.PI / 4), vx0 = v0 * Math.cos(Math.PI / 4);
+        const tF = (vy0 + Math.sqrt(vy0 * vy0 + 2 * w.env.gravity * h0)) / w.env.gravity;
+        let touchX = 0;
+        for (let i = 0; i < 120 * 12; i++) {
+          w.step(1 / 120);
+          if (b.pos.y <= b.radiusM + 1e-6) { touchX = b.pos.x; break; }
+        }
+        check("vacuum range 30m/s@45°", vx0 * tF, touchX, 2);
+      }
+      // 2. Terminal velocity: peak fall speed of a draggy body must equal theory.
+      {
+        const w = new EngineWorld();
+        const b = w.spawn({ shape: "sphere", material: "styrofoam", sizeM: 0.5, pos: { x: 0, y: 2000, z: 0 }, dragProfile: "sphere" });
+        let peak = 0;
+        for (let i = 0; i < 120 * 30; i++) {
+          w.step(1 / 120);
+          peak = Math.max(peak, Math.abs(b.vel.y));
+          if (b.pos.y <= b.radiusM + 1e-6) break;
+        }
+        check("terminal velocity styrofoam 0.5m", terminalVelocity(b.massKg, b.dragCd, b.areaM2, w.env.airDensity), peak, 5);
+      }
+      // 3. Free fall position in vacuum at t=1 s: y = 20 − g/2.
+      {
+        const w = new EngineWorld();
+        w.env.airDensity = 0;
+        const b = w.spawn({ shape: "sphere", material: "steel", sizeM: 0.1, pos: { x: 0, y: 20, z: 0 }, dragProfile: "sphere" });
+        w.run(1);
+        check("vacuum free-fall y@1s", 20 - w.env.gravity / 2, b.pos.y, 1);
+      }
+      // 4. Buoyancy equilibrium: oak box (750/1000) floats with center at 1.45 m.
+      {
+        const w = new EngineWorld();
+        w.addFluid({ name: "Water", min: { x: -3, y: 0, z: -3 }, max: { x: 3, y: 1.7, z: 3 }, density: 1000, viscosity: 0.001 });
+        const oak = w.spawn({ shape: "box", material: "oak", sizeM: 0.5, pos: { x: 0, y: 5, z: 0 } });
+        w.run(15);
+        check("oak float equilibrium", 1.45, oak.pos.y, 20);
+      }
+      const maxErr = Math.max(...checks.map((c) => c.errPct));
+      return { codex: CODEX_VERSION, checks, maxErrPct: +maxErr.toFixed(2), allPass: checks.every((c) => c.pass) };
+    }),
   // ---- simulation (stateful world in ctx) ----
-  def("sim-spawn", "Spawn a body (or registry model by index) into the world.", T([], [["material", "string", "default oak"], ["sizeM", "number", "default 1"], ["shape", "string", "box|sphere"], ["heightM", "number", "default 10"], ["modelIndex", "number", "optional registry spawn"], ["tempC", "number", "optional"]]),
+  def("sim-spawn", "Spawn a body (or registry model by index) into the world.", T([], [["material", "string", "default oak"], ["sizeM", "number", "default 1"], ["shape", "string", "box|sphere"], ["heightM", "number", "default 10"], ["modelIndex", "number", "optional registry spawn"], ["tempC", "number", "optional"], ["ghost", "boolean", "nested cargo: skips body contact"]]),
     (a, ctx) => {
       const w = W(ctx);
       if (a.modelIndex !== undefined) return { id: spawnModel(w, num(a, "modelIndex"), { x: 0, y: num(a, "heightM", 10), z: 0 }) };
-      const b = w.spawn({ shape: (str(a, "shape", "box") === "sphere" ? "sphere" : "box"), material: str(a, "material", "oak"), sizeM: num(a, "sizeM", 1), pos: { x: 0, y: num(a, "heightM", 10), z: 0 }, tempC: a.tempC !== undefined ? num(a, "tempC") : undefined });
+      const b = w.spawn({ shape: (str(a, "shape", "box") === "sphere" ? "sphere" : "box"), material: str(a, "material", "oak"), sizeM: num(a, "sizeM", 1), pos: { x: 0, y: num(a, "heightM", 10), z: 0 }, tempC: a.tempC !== undefined ? num(a, "tempC") : undefined, ghost: a.ghost === true });
       return { id: b.id, massKg: +b.massKg.toFixed(1) };
     }),
   def("sim-run", "Step the world N seconds at 120 Hz. Returns events.", T([], [["seconds", "number", "default 5"]]),

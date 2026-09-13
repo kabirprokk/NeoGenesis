@@ -3,6 +3,7 @@
 // material properties. This is what the AI "inhabits" during an experience.
 import { PHYSICS } from "./constants.js";
 import { MATERIALS, FLUIDS, DRAG_CD, type MaterialDef } from "./materials.js";
+import { SPECIFIC_HEAT, EMISSIVITY, H_CONV } from "./science.js";
 import { terminalVelocity } from "./physics.js";
 
 export interface Vec3 { x: number; y: number; z: number }
@@ -11,6 +12,8 @@ export type Shape = "sphere" | "box";
  * buoyancy + viscous damping; equilibrium floating emerges, nothing scripted. */
 export interface FluidBox {
   name: string; min: Vec3; max: Vec3; density: number; viscosity: number;
+  /** Pinned temperature (°C). Undefined = ambient, so pools track weather. */
+  tempC?: number;
 }
 export interface Body {
   id: string; shape: Shape; material: MaterialDef;
@@ -18,6 +21,9 @@ export interface Body {
   pos: Vec3; vel: Vec3; massKg: number;
   tempC: number; broken: boolean; molten: boolean; burning: boolean;
   fluid: string | null; isStatic: boolean;
+  hasMoved: boolean; settled: boolean; // rest-event bookkeeping (one "came to rest" per body)
+  hitT: number; // last body-on-body impact time (narration cooldown)
+  ghost: boolean; // nested cargo (fluid cores): skips body-vs-body contact, still hits ground
   dragProfile: string; dragCd: number; areaM2: number;
   events: string[];
 }
@@ -43,6 +49,7 @@ export class EngineWorld {
   spawn(opts: {
     shape?: Shape; material?: string; sizeM?: number; pos?: Vec3; vel?: Vec3;
     tempC?: number; dragProfile?: string; massOverrideKg?: number; static?: boolean;
+    ghost?: boolean;
     scale?: Vec3; // non-uniform stretch (tank walls, beams) — volume/area scale along
   }): Body {
     const mat = MATERIALS[opts.material ?? "oak"];
@@ -60,6 +67,7 @@ export class EngineWorld {
       tempC: opts.tempC ?? this.env.ambientC,
       broken: false, molten: false, burning: false,
       fluid: null, isStatic: opts.static ?? false,
+      hasMoved: false, settled: false, hitT: -10, ghost: opts.ghost ?? false,
       dragProfile, dragCd: DRAG_CD[dragProfile] ?? DRAG_CD.cube, areaM2: area,
       events: [],
     };
@@ -79,6 +87,7 @@ export class EngineWorld {
       // Quadratic air drag, capped at terminal velocity (Table 18 behavior).
       const vt = terminalVelocity(b.massKg, b.dragCd, b.areaM2, this.env.airDensity);
       const sp = Math.hypot(b.vel.x, b.vel.y, b.vel.z);
+      if (sp > 1.5) b.hasMoved = true;
       if (sp > 1e-6) {
         const dragF = 0.5 * this.env.airDensity * sp * sp * b.dragCd * b.areaM2;
         const dv = (dragF / b.massKg) * dt;
@@ -93,6 +102,7 @@ export class EngineWorld {
       const r0 = b.shape === "sphere" ? b.radiusM : b.halfM!.y;
       let sub = 0;
       let fl: FluidBox | null = null;
+      let subTemp: number | null = null;
       for (const f of this.fluids) {
         if (b.pos.x > f.min.x && b.pos.x < f.max.x && b.pos.z > f.min.z && b.pos.z < f.max.z) {
           const s = Math.min(1, Math.max(0, (f.max.y - (b.pos.y - r0)) / (2 * r0)));
@@ -106,6 +116,7 @@ export class EngineWorld {
           b.events.push(ev); out.push(ev); this.log.push(ev);
         }
         b.fluid = fl.name;
+        subTemp = fl.tempC ?? this.env.ambientC;
         b.vel.y += this.env.gravity * (fl.density / b.material.density) * sub * dt;
         const k = Math.exp(-sub * (1.5 + Math.min(8, fl.viscosity * 6)) * dt);
         b.vel.x *= k; b.vel.y *= k; b.vel.z *= k;
@@ -148,6 +159,12 @@ export class EngineWorld {
           // Resting contact friction kills slide.
           const fr = Math.max(0, 1 - this.env.groundMuS * dt * 8);
           b.vel.x *= fr; b.vel.z *= fr;
+          // One rest note per body, so slides/rolls/crushes narrate their ending.
+          if (b.hasMoved && !b.settled && Math.hypot(b.vel.x, b.vel.z) < 0.4) {
+            b.settled = true;
+            const ev = `${b.id} (${b.material.name}) came to rest.`;
+            b.events.push(ev); this.log.push(ev);
+          }
         }
       }
       // Thermal state vs ambient + own thresholds.
@@ -162,11 +179,130 @@ export class EngineWorld {
         const ev = `${b.id} (${m.name}) IGNITED at ${b.tempC}°C (ignites ${m.ignitionC}°C).`;
         b.events.push(ev); out.push(ev); this.log.push(ev);
       }
-      // Relax toward ambient (rate is qualitative — no specific-heat data claimed).
-      b.tempC += (this.env.ambientC - b.tempC) * Math.min(1, dt * 0.05);
+      // Real heat transfer: convection in the surrounding medium (still air 10,
+      // water 800, lava 500 W/m²·K) + Stefan-Boltzmann radiation with the
+      // material's emissivity. dT/dt = (h·A·ΔT + ε·σ·A·ΔT⁴) / (m·c).
+      const c = SPECIFIC_HEAT[m.id]?.c ?? 1000;
+      const surf = b.areaM2 * (b.shape === "sphere" ? 4 : 6);
+      const h = b.fluid
+        ? (b.fluid.toLowerCase().includes("lava") ? H_CONV.lavaBath.h : H_CONV.waterBath.h)
+        : H_CONV.stillAir.h;
+      const em = EMISSIVITY[m.id]?.e ?? 0.9;
+      // A submerged body equilibrates toward the FLUID (lava cooks, water cools),
+      // otherwise toward ambient air.
+      const Tamb = subTemp ?? this.env.ambientC;
+      const k4 = (t: number): number => { const K = t + 273.15; return K * K * K * K; };
+      const dConv = (h * surf * (Tamb - b.tempC)) / (b.massKg * c);
+      const dRad = (em * PHYSICS.STEFAN_BOLTZMANN * surf * (k4(Tamb) - k4(b.tempC))) / (b.massKg * c);
+      b.tempC += (dConv + dRad) * dt;
     }
+    this.collidePairs(out);
     this.time += dt;
     return out;
+  }
+
+  /** Body-vs-body contact: sphere/sphere, box/box (AABB, no rotation in this
+   *  engine), sphere/box via closest point. Statics have infinite mass, so
+   *  tank walls now contain bodies. Impulse uses pair-averaged restitution;
+   *  hard hits fracture against each body's own ultimate strength. */
+  private collidePairs(out: string[]): void {
+    const bs = this.bodies;
+    const extents = (b: Body): Vec3 => b.shape === "sphere"
+      ? { x: b.radiusM, y: b.radiusM, z: b.radiusM }
+      : { x: b.halfM!.x, y: b.halfM!.y, z: b.halfM!.z };
+    for (let i = 0; i < bs.length; i++) {
+      for (let j = i + 1; j < bs.length; j++) {
+        const a = bs[i], c = bs[j];
+        if (a.isStatic && c.isStatic) continue;
+        if (a.ghost || c.ghost) continue; // nested cargo flies with its shell
+        const ea = extents(a), ec = extents(c);
+        let nx = 0, ny = 0, nz = 0, overlap = 0;
+        if (a.shape === "sphere" && c.shape === "sphere") {
+          const dx = c.pos.x - a.pos.x, dy = c.pos.y - a.pos.y, dz = c.pos.z - a.pos.z;
+          const d = Math.hypot(dx, dy, dz);
+          const rr = a.radiusM + c.radiusM;
+          if (d >= rr) continue;
+          if (d > 1e-9) { nx = dx / d; ny = dy / d; nz = dz / d; } else { ny = 1; }
+          overlap = rr - d;
+        } else if (a.shape === "box" && c.shape === "box") {
+          const dx = c.pos.x - a.pos.x, dy = c.pos.y - a.pos.y, dz = c.pos.z - a.pos.z;
+          const ox = ea.x + ec.x - Math.abs(dx), oy = ea.y + ec.y - Math.abs(dy), oz = ea.z + ec.z - Math.abs(dz);
+          if (ox <= 0 || oy <= 0 || oz <= 0) continue;
+          if (ox <= oy && ox <= oz) { nx = dx >= 0 ? 1 : -1; overlap = ox; }
+          else if (oy <= oz) { ny = dy >= 0 ? 1 : -1; overlap = oy; }
+          else { nz = dz >= 0 ? 1 : -1; overlap = oz; }
+        } else {
+          // Sphere vs box: closest point on the box to the sphere center.
+          const s = a.shape === "sphere" ? a : c;
+          const box = a.shape === "box" ? a : c;
+          const eb = extents(box);
+          const qx = Math.max(box.pos.x - eb.x, Math.min(s.pos.x, box.pos.x + eb.x));
+          const qy = Math.max(box.pos.y - eb.y, Math.min(s.pos.y, box.pos.y + eb.y));
+          const qz = Math.max(box.pos.z - eb.z, Math.min(s.pos.z, box.pos.z + eb.z));
+          const dx = s.pos.x - qx, dy = s.pos.y - qy, dz = s.pos.z - qz;
+          const d = Math.hypot(dx, dy, dz);
+          if (d >= s.radiusM) continue; // separated
+          let fx = 0, fy = 0, fz = 0, ov = 0;
+          if (d > 1e-9) { fx = dx / d; fy = dy / d; fz = dz / d; ov = s.radiusM - d; }
+          else {
+            // Center inside (or on) the box: eject along min-penetration axis.
+            const px = eb.x - Math.abs(s.pos.x - box.pos.x);
+            const py = eb.y - Math.abs(s.pos.y - box.pos.y);
+            const pz = eb.z - Math.abs(s.pos.z - box.pos.z);
+            if (px <= py && px <= pz) { fx = s.pos.x >= box.pos.x ? 1 : -1; ov = px + s.radiusM; }
+            else if (py <= pz) { fy = s.pos.y >= box.pos.y ? 1 : -1; ov = py + s.radiusM; }
+            else { fz = s.pos.z >= box.pos.z ? 1 : -1; ov = pz + s.radiusM; }
+          }
+          // Contact normal must point from a to c: f runs box→sphere.
+          if (s === a) { fx = -fx; fy = -fy; fz = -fz; }
+          nx = fx; ny = fy; nz = fz; overlap = ov;
+        }
+        if (overlap <= 0) continue;
+        // Mass-split positional correction (statics don't move).
+        const ima = a.isStatic ? 0 : 1 / a.massKg;
+        const imc = c.isStatic ? 0 : 1 / c.massKg;
+        const imSum = ima + imc;
+        if (imSum <= 0) continue;
+        const corr = overlap / imSum;
+        a.pos.x -= nx * corr * ima; a.pos.y -= ny * corr * ima; a.pos.z -= nz * corr * ima;
+        c.pos.x += nx * corr * imc; c.pos.y += ny * corr * imc; c.pos.z += nz * corr * imc;
+        // Impulse along the contact normal.
+        const vn = (c.vel.x - a.vel.x) * nx + (c.vel.y - a.vel.y) * ny + (c.vel.z - a.vel.z) * nz;
+        if (vn < 0) {
+          const e = (a.material.restitution + c.material.restitution) / 2;
+          const jimp = (-(1 + e) * vn) / imSum;
+          a.vel.x -= nx * jimp * ima; a.vel.y -= ny * jimp * ima; a.vel.z -= nz * jimp * ima;
+          c.vel.x += nx * jimp * imc; c.vel.y += ny * jimp * imc; c.vel.z += nz * jimp * imc;
+          // Resting-contact friction: bleed tangential slide on hard contact.
+          const fr = Math.max(0, 1 - 0.2 * (1 / 120) * 60);
+          a.vel.x *= 1 - (1 - fr) * (ima / imSum); a.vel.z *= 1 - (1 - fr) * (ima / imSum);
+          c.vel.x *= 1 - (1 - fr) * (imc / imSum); c.vel.z *= 1 - (1 - fr) * (imc / imSum);
+          const speed = -vn;
+          if (speed > 1.5 && this.time - Math.max(a.hitT, c.hitT) > 0.5) {
+            a.hitT = this.time; c.hitT = this.time;
+            const ev = `${a.id} (${a.material.name}) collided with ${c.id} (${c.material.name}) at ${speed.toFixed(1)} m/s.`;
+            a.events.push(ev); c.events.push(ev); out.push(ev); this.log.push(ev);
+          }
+          // Fracture: reduced-mass energy vs each body's own ultimate.
+          const mu = ima + imc > 0 ? 1 / imSum : 0;
+          for (const bd of [a, c]) {
+            if (bd.isStatic || bd.broken) continue;
+            const brittle = ["glass", "concrete", "ice"].includes(bd.material.id);
+            const spread = !brittle ? 0.1 : bd.shape === "sphere" ? 0.002 : 0.007;
+            const r0 = bd.shape === "sphere" ? bd.radiusM : bd.halfM!.y;
+            const area = bd.shape === "sphere" ? Math.PI * r0 * r0 * spread : (2 * r0) * (2 * r0) * spread;
+            const ke = 0.5 * mu * speed * speed;
+            const pMpa = ke / Math.max(1e-6, area) / 1e6;
+            const ult = bd.material.ultimateMpa ?? bd.material.tensileMpa ?? Infinity;
+            if (pMpa > ult) {
+              bd.broken = true;
+              const bev = `${bd.id} (${bd.material.name}) SHATTERED in collision at ${speed.toFixed(1)} m/s — ${pMpa.toFixed(0)} MPa > ${ult} MPa ultimate.`;
+              bd.events.push(bev); out.push(bev); this.log.push(bev);
+            }
+          }
+        }
+      }
+    }
   }
 
   /** Run seconds of sim at 120 Hz. Returns all events. */

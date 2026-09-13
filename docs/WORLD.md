@@ -1,35 +1,19 @@
-# WORLD — how NeoGenesis builds a believable planet (no placeholders)
+# WORLD — the plane lab (no placeholders, no decoration)
 
-Present state: the playable game is a plain physics plane (`frontend/src/lab/planeWorld.ts`)
-on the reality engine — real gravity, real material bodies, real sky/sun/moon/climate.
-The terrain-streaming pipeline below was removed as dead code (nothing in the game
-imported it); this section is kept as the design for re-adding terrain later.
+The game is one flat solid plane (`frontend/src/lab/planeWorld.ts`) on the
+reality engine: real gravity, real material bodies, real fluids, real
+sky/sun/moon as time-of-day. Neo stages experiments here — tanks, heat
+chambers, spark gaps, laser benches, acid vats — and the engine lives them
+at 120 Hz while you watch.
 
-Removed pipeline (design reference, not live code):
+Frames: feet in plane metres around the spawn; the ground mesh follows the
+player in 10 m snaps. Staged bodies and tank walls are solid (circle-collider
+push-out), water slows you down, the camera can't clip underground, and the
+shadow frustum follows you. Meshes are pooled per body id and removed on
+cleanup (no heap bleed).
 
-```
-Real elevation raster / procedural fallback
-  → continental base → mountain mask → ridged massifs + foothills + rolling
-    hills + plateau benches → droplet hydraulic erosion + thermal weathering
-    → river tracing with flow accumulation + trapped basins → lakes
-  → per-vertex grass/dirt/mud/sand/rock/scree/snow/seabed by slope × altitude
-    × moisture × temperature × biome, storm wetness
-  → flow-animated river ribbons in carved channels, basin discs, shoreline foam
-  → moisture-clustered groves, canopy + trunks + shrubs + wind-swayed grass;
-    boulders on scree, pebbles on shores
-  → EnvironmentalAudioSystem (audio/ambience.ts): surf near water, insects in night
-    forests, thin air at altitude, storm wind body
-```
-
-Frames: one spawn-anchored world frame (ENU meters of spawn) shared by feet, terrain,
-water, vegetation, rocks, rivers, and fauna — walking can never detach you from the
-world. A 40 km far-field ring carries real landforms to the horizon (fog + atmosphere
-do the rest); the miniature space-globe stays hidden in surface mode. Trees, boulders,
-and animals are solid (circle-collider push-out), uphill costs speed, the camera can't
-clip underground, and the shadow frustum follows you. Scatter seeds quantize to location,
-so rebuilds are pop-free. Rebuilds run on real movement (>25 m) or 8 s staleness;
-GPU resources are disposed every cycle (no heap bleed).
-
-Honest limits: relief raster is range-scaled (coastline mask is the accurate layer);
-upgrade path is ETOPO1/GEBCO with no code change. Dinosaur/AAA flora models arrive
-via model slots when licensed scans are sourced (see ASSETS.md).
+Honest limits: bodies collide pairwise (sphere/sphere, box/box, sphere/box —
+impulse with pair-averaged restitution, fracture on hard hits) but there is no
+rotational dynamics and no continuous collision (relativistic speeds tunnel);
+the engine has no freeze or corrosion kinetics (cold is staged, corrosion is a
+table verdict); and fluids are box volumes, not free-surface waves.

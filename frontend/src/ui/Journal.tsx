@@ -12,7 +12,7 @@ export function Journal({ open, onClose, entries, onAdd, lat, lon, playerId }:
       <h2>Field Journal</h2>
       <p style={{ opacity: 0.7, fontSize: 13 }}>Your record of the journey. No quest markers — only what you observe.</p>
       <input placeholder="Observation title…" value={title} onChange={(e) => setTitle(e.target.value)} />
-      <textarea rows={3} placeholder="Species, weather, geology, stars…" value={body} onChange={(e) => setBody(e.target.value)} />
+      <textarea rows={3} placeholder="Materials, heat, impacts, measurements…" value={body} onChange={(e) => setBody(e.target.value)} />
       <button onClick={() => {
         if (!title.trim()) return;
         const e = { title, body, lat, lon, at: new Date().toISOString() };

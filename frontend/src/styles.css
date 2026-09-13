@@ -21,3 +21,20 @@ canvas.webgl { display: block; width: 100%; height: 100%; }
 .panel button { background: #1d2b1d; color: #dfe8d5; border: 1px solid #3a4a3a; border-radius: 6px;
   padding: 7px 12px; cursor: pointer; margin-right: 8px; }
 .vitals span.low { color: #ff9a7a; }
+/* ---- NeoGenesis motion layer: panels slide, badges pop, buttons breathe ---- */
+@keyframes neo-slide-in { from { opacity: 0; transform: translate(-50%, -14px) scale(0.98); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+@keyframes neo-pop { 0% { transform: scale(0.6); } 55% { transform: scale(1.12); } 100% { transform: scale(1); } }
+@keyframes neo-glow-pulse { 0%, 100% { box-shadow: 0 0 0 rgba(143,227,154,0); } 50% { box-shadow: 0 0 14px rgba(143,227,154,0.55); } }
+@keyframes neo-run-flash { 0% { filter: brightness(1.9); } 100% { filter: brightness(1); } }
+@keyframes neo-live-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.panel { animation: neo-slide-in 0.28s ease-out; }
+.panel button { transition: transform 0.12s ease, background 0.15s ease, box-shadow 0.15s ease; }
+.panel button:hover { transform: translateY(-1px); background: #243824; animation: neo-glow-pulse 1.6s ease-in-out infinite; }
+.panel button:active { transform: translateY(1px) scale(0.98); }
+.verdict-real, .verdict-mixed, .verdict-notreal { display: inline-block; animation: neo-pop 0.35s ease-out; }
+.verdict-live { animation: neo-live-blink 1.1s ease-in-out infinite; }
+.experiment-running { animation: neo-run-flash 0.5s ease-out; }
+.hud-top { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .panel, .verdict-real, .verdict-mixed, .verdict-notreal, .verdict-live, .experiment-running { animation: none; }
+}

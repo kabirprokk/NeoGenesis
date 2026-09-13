@@ -7,7 +7,7 @@ import type { GameCtx, NeoRunResult } from "./terminalCore.js";
 function Badge({ v }: { v: NeoRunResult["verdict"]["verdict"] }) {
   const bg = v === "REAL" ? "#1d3a24" : v === "NOT REAL" ? "#3a1d1d" : "#3a331d";
   const fg = v === "REAL" ? "#8fe39a" : v === "NOT REAL" ? "#ff9a8a" : "#e8cf7a";
-  return <span style={{ background: bg, color: fg, padding: "2px 10px", borderRadius: 12, fontWeight: 700, fontSize: 12 }}>{v}</span>;
+  return <span key={v} style={{ background: bg, color: fg, padding: "2px 10px", borderRadius: 12, fontWeight: 700, fontSize: 12, display: "inline-block", animation: "neo-pop 0.35s ease-out" }}>{v}</span>;
 }
 
 export function NeoBar({ getCtx }: { getCtx: () => GameCtx | null }) {

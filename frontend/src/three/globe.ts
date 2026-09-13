@@ -1,4 +1,5 @@
-// Globe scene: planet sphere + atmosphere shell + sun/moon lights + star field.
+// Sky: atmosphere shell + sun/moon lights + star field. No planet mesh —
+// the game is a plane lab; the sky is time-of-day, nothing more.
 import * as THREE from "three";
 import { ATMOS_FRAG, ATMOS_VERT } from "./atmosphere.js";
 import { DEFAULT_ERA } from "../../../shared/src/era.js";
@@ -10,22 +11,6 @@ export interface SkyState {
 
 export function buildGlobe(scene: THREE.Scene) {
   const R = 6371; // scene units scaled (1 unit = 1 km, camera near-field trick)
-  const texLoader = new THREE.TextureLoader();
-  const dayTex = texLoader.load("/earth/earth-day.jpg", (t) => { t.colorSpace = THREE.SRGBColorSpace; });
-  const bumpTex = texLoader.load("/earth/earth-topology.png");
-  // Missing files (offline first run) → flat color fallback; game still boots.
-  dayTex.premultiplyAlpha = false;
-  const earth = new THREE.Mesh(
-    new THREE.SphereGeometry(R, 96, 64),
-    new THREE.MeshStandardMaterial({ map: dayTex, bumpMap: bumpTex, bumpScale: 18, color: 0xffffff, roughness: 0.95, metalness: 0 })
-  );
-  // Surface mode: the player stands ON the planet, so a miniature globe at the
-  // scene origin would surround them with wrong geometry. Hidden — the far-field
-  // terrain + atmosphere shell carry the planetary illusion. (The texture still
-  // serves the 2D planetary map.) Re-enable only for an orbital/space view.
-  earth.visible = false;
-  earth.rotation.z = 0;
-  scene.add(earth);
 
   const atmosMat = new THREE.ShaderMaterial({
     vertexShader: ATMOS_VERT, fragmentShader: ATMOS_FRAG,
@@ -79,7 +64,7 @@ export function buildGlobe(scene: THREE.Scene) {
     new THREE.MeshBasicMaterial({ color: 0xdde4ee }));
   scene.add(moonMesh);
 
-  return { earth, atmosMat, starMat, sun, moon, moonMesh, R };
+  return { atmosMat, starMat, sun, moon, moonMesh, R };
 }
 
 export function updateSky(handles: ReturnType<typeof buildGlobe>, dateUtc: Date, lat: number, lon: number): SkyState {

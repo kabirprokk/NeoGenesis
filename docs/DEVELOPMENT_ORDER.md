@@ -1,11 +1,14 @@
-# Development order + status
+# Development order + status (lab roadmap — no decoration phases)
 
-- [x] **Phase 1** — plane world on the reality engine, PlanetTime, Sun/Moon/stars,
-      atmosphere shader, first-person player, minimal HUD, ambient audio stub.
-- [ ] **Phase 2** — terrain detail (procedural heightfield next; no tile streaming).
-- [ ] **Phase 3** — biomes/vegetation/water/weather/climate (weather + climate live; GPU instancing next).
-- [ ] **Phase 4** — wildlife: LOCAL agents + REGIONAL/GLOBAL cohorts, food web (species defs + cohort math live in `shared`).
-- [ ] **Phase 5** — survival/shelter/fire/exploration (survival live).
-- [ ] **Phase 6** — Field Journal/discovery/geology/astronomy (journal live in localStorage, discovery next).
+- [x] **Phase 1** — plane world on the reality engine, Sun/Moon/stars,
+      atmosphere shader, first-person player, solid bodies, minimal HUD,
+      Neo bar + Experience Lab + terminal (one run flow), journal in localStorage.
+- [ ] **Phase 2** — more verbs, more codex tables, tighter verdicts; kill every
+      remaining MIXED that data can resolve.
+- [ ] **Phase 3** — measurement tools: on-screen protractor/scale/stopwatch,
+      trace graphs for every run.
+- [ ] **Phase 4** — experiment sharing + reproducibility: export/import a run
+      (sentence + seed + verdict) as a file anyone can replay.
 
-Each phase keeps 60 FPS budgets: workers, instancing, pooling, LRU.
+Each phase keeps 60 FPS budgets: fixed-step sim, per-body mesh pooling, fluids rebuilt
+only on change, no per-frame allocations in the hot loop.
