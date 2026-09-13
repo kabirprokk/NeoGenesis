@@ -91,7 +91,19 @@ export function stageNeo(world: EngineWorld, plan: NeoPlan, ax: number, az: numb
     surfaceY = buildTank(world, plan.target.fluid, ax, az, half, lines);
   }
 
-  const cast = [plan, ...plan.multi];
+  const cast = plan.condIf && plan.condThen ? [plan.condIf, plan.condThen] : [plan, ...plan.multi];
+  if (plan.condIf && plan.condThen) {
+    lines.push("branch: the second setup drops only if the first breaks — verdict simmed the condition first");
+  }
+  // Obstacle wall ("over the wall"): a static slab standing in the flight
+  // lane. The verdict measures clearance; the live wall collides honestly.
+  if (plan.obstacle && !(plan.condIf && plan.condThen)) {
+    const half = plan.obstacle.heightM / 2;
+    const wb = world.spawn({ shape: "box", material: plan.obstacle.material, sizeM: 1,
+      scale: { x: 0.4, y: half, z: 2 }, pos: { x: ax + 8, y: half, z: az }, static: true });
+    stagedBodies.add(wb.id);
+    lines.push(`wall staged at +8 m (${plan.obstacle.heightM} m tall) — clear it or clang off it, live`);
+  }
   cast.forEach((p, si) => {
     const X = ax + si * 3.5; // crowd spreads along x so every body is visible
     const pmat = MATERIALS[p.material] ?? MATERIALS.oak;

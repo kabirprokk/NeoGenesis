@@ -38,7 +38,9 @@
 - Heat transfer is real but lumped: convection in the surrounding medium
   (still air 10, water 800, lava 500 W/m²·K) + Stefan-Boltzmann radiation with
   tabulated emissivity, integrated per body with its mass and specific heat.
-  Uniform body temperature is assumed; conduction *within* bodies and phase-change
+  Uniform body temperature is assumed but CHECKED: every melt verdict quotes
+  a Biot number, and Bi > 0.1 flags the skin-outruns-core regime as a lower
+  time bound. Conduction *within* bodies and phase-change
   kinetics are not modeled (fusion energy is quoted, not timed).
 
 ## 4. Data certainty tiers (load-bearing)
