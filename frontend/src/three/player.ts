@@ -12,12 +12,14 @@ export function uiHasFocus(e?: Event): boolean {
 export interface MoveState { f: boolean; b: boolean; l: boolean; r: boolean; run: boolean; crouch: boolean; jump: boolean }
 
 export class PlayerController {
-  obj = new THREE.Object3D(); // yaw holder
-  pitch = new THREE.Object3D(); // pitch holder (camera child)
+  obj = new THREE.Object3D(); // yaw holder, at the feet
+  pitch = new THREE.Object3D(); // pitch holder, at EYE height (see below)
   camera: THREE.PerspectiveCamera;
   vel = new THREE.Vector3();
   grounded = true;
   eyeHeight = 1.7;
+  private eyeCur = 1.7; // crouch eases this, never the camera directly
+  private shakeX = 0; private shakeY = 0; // impact offsets, decayed per frame
   gravity = 12.5;   // set 9.80665 for real Earth (engine-owned games do this)
   maxFall = 54;     // human terminal velocity, m/s
   keys: MoveState = { f: false, b: false, l: false, r: false, run: false, crouch: false, jump: false };
@@ -26,12 +28,12 @@ export class PlayerController {
     this.keys = { f: false, b: false, l: false, r: false, run: false, crouch: false, jump: false };
     this.vel.set(0, 0, 0);
   }
-  /** Impact shake: kicks the PITCH holder, never the camera — head-bob owns
+  /** Impact shake: accumulates into dedicated offsets — head-bob owns
    * camera.position.x and used to overwrite shake offsets every frame, which
    * erased horizontal shake and leaked vertical shake into the eye lerp. */
   kick(x: number, y: number): void {
-    this.pitch.position.x += x;
-    this.pitch.position.y += y;
+    this.shakeX = THREE.MathUtils.clamp(this.shakeX + x, -0.5, 0.5);
+    this.shakeY = THREE.MathUtils.clamp(this.shakeY + y, -0.5, 0.5);
   }
   /** Face a world point (yaw only). Pitch is the player's eyes — left alone. */
   lookAt(x: number, z: number): void {
@@ -43,16 +45,19 @@ export class PlayerController {
   teleport(x: number, z: number, levelView: boolean): void {
     this.obj.position.set(x, 0, z);
     this.vel.set(0, 0, 0);
-    if (levelView) {
-      this.pitch.rotation.x = 0;
-      this.pitch.position.set(0, 0, 0);
-    }
+    this.shakeX = 0; this.shakeY = 0;
+    if (levelView) this.pitch.rotation.x = 0;
+    this.pitch.position.set(0, this.eyeCur, 0);
   }
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
+    // Pivot at the EYES, not the feet: rotating pitch must turn the view in
+    // place. The old rig pivoted at the feet, so looking down swung the
+    // camera in a 1.7 m arc straight into the ground.
+    this.pitch.position.set(0, this.eyeCur, 0);
     this.obj.add(this.pitch);
     this.pitch.add(camera);
-    camera.position.set(0, this.eyeHeight, 0);
+    camera.position.set(0, 0, 0);
   }
   attach(el: HTMLElement) {
     el.addEventListener("click", () => el.requestPointerLock?.());
@@ -135,23 +140,30 @@ export class PlayerController {
         }
       }
     }
+    // Eyes ride the pitch holder: crouch eases eye height, shake adds a
+    // decaying offset, and the holder is composed fresh every frame so the
+    // two can never fight (the old camera.position.y lerp did).
     const eyeTarget = this.keys.crouch ? 1.05 : this.eyeHeight;
-    this.camera.position.y += (eyeTarget - this.camera.position.y) * Math.min(1, 10 * dt);
+    this.eyeCur += (eyeTarget - this.eyeCur) * Math.min(1, 10 * dt);
+    const shK = Math.max(0, 1 - 7 * dt);
+    this.shakeX *= shK; this.shakeY *= shK;
+    if (Math.abs(this.shakeX) < 1e-4) this.shakeX = 0;
+    if (Math.abs(this.shakeY) < 1e-4) this.shakeY = 0;
+    this.pitch.position.set(this.shakeX, this.eyeCur + this.shakeY, 0);
     if (this.obj.position.y <= groundY) {
       this.obj.position.y = groundY; this.vel.y = 0; this.grounded = true;
     }
-    // Camera never clips underground on steep ground.
+    // Eyes never clip underground on steep ground.
     const minEye = groundY + 0.4;
-    if (this.obj.position.y + this.camera.position.y < minEye) {
-      this.obj.position.y = minEye - this.camera.position.y;
+    if (this.obj.position.y + this.pitch.position.y < minEye) {
+      this.obj.position.y = minEye - this.pitch.position.y;
     }
     // Subtle head-bob (weight, not shake). Owns camera.position.x outright —
-    // impact shake lives on the pitch holder (see kick()), never here.
+    // impact shake lives in the pitch offsets (see kick()), never here.
     const hSpeed = Math.hypot(this.vel.x, this.vel.z);
     const t = performance.now() / 1000;
     this.camera.position.x = Math.sin(t * (4 + hSpeed)) * 0.018 * Math.min(1, hSpeed / 4);
-    // Shake decay: pitch offset relaxes to zero each frame.
-    this.pitch.position.multiplyScalar(Math.max(0, 1 - 7 * dt));
-    if (this.pitch.position.lengthSq() < 1e-8) this.pitch.position.set(0, 0, 0);
+    this.camera.position.y = 0;
+    this.camera.position.z = 0;
   }
 }
