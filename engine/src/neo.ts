@@ -509,6 +509,7 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
 
   let sizeM = 0.5, heightM: number | null = null;
   let sizeRawM: number | null = null, sizeExplicit = false;
+  let heightExplicit = false; // true only when a number in the sentence set the height
   const used = new Set<number>();
   // Height cue: number AFTER from/above/up ("from 100m"), or just before
   // high/tall ("100m high"). Size cue: number EITHER side of a shape word
@@ -522,7 +523,7 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
 
   for (const [i, L] of lengths.entries()) {
     if (after(L.index, heightIdx, 16) || beforeWord(L.index, ["high", "tall"], 8)) {
-      if (heightM === null) { heightM = L.value * unitToM(L.unit); used.add(i); }
+      if (heightM === null) { heightM = L.value * unitToM(L.unit); heightExplicit = true; used.add(i); }
     } else if (beside(L.index, sizeIdx, 14)) {
       if (sizeM === 0.5 && !used.has(i)) {
         sizeRawM = L.value * unitToM(L.unit);
@@ -539,11 +540,13 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
   let rescuedNote: string | null = null;
   if (heightM === null && ballistic && sizeRawM !== null && sizeRawM > 6 && !sizeExplicit) {
     heightM = sizeRawM;
+    heightExplicit = true;
     rescuedNote = `${sizeRawM} m read as height (too big for an object).`;
     sizeM = 0.5; sizeRawM = null;
   }
   if (heightM === null && rest.length && (ballistic || action === "float" || action === "sink")) {
     heightM = rest[0].value * unitToM(rest[0].unit);
+    heightExplicit = true;
     rest.shift();
   }
   if (sizeM === 0.5 && rest.length && !ballistic) {
@@ -577,7 +580,9 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
       if (re.test(raw)) { sizeM = v; adjApplied = true; sizeNote = `${re.source.replace(/\\b/g, "")} ≈ ${v} m.`; }
     }
   }
-  if (containerWord && sizeRawM === null && heightM !== null && (sizeM === 0.5 || adjApplied)) {
+  // A STATED height doubles as the container's size ("height 1 meter" → 1 m);
+  // silent defaults (10 m) must never inflate a bucket into a monster.
+  if (containerWord && sizeRawM === null && heightM !== null && heightExplicit && (sizeM === 0.5 || adjApplied)) {
     sizeM = Math.min(3, Math.max(0.05, heightM));
     sizeNote = `container height ${heightM} m read as its size.`;
   }
@@ -604,10 +609,22 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
   // so the world target stays ground and the fluid becomes cargo.
   let containedFluid: string | null = null;
   const vesselLike = shapeHit !== null || matHit?.id === "glass";
+  // "bucket of lava", "glass of water": A must be a vessel, not a wave ("wall of water").
+  const ofM = raw.match(/(\w+)\s+of\s+(\w+)/);
+  if (ofM && !containedFluid) {
+    const f = pickFluidToken([ofM[2]]);
+    const aWord = ofM[1];
+    const aIsVessel = SHAPES.some((s) => s.words.includes(aWord) || wordVariants(aWord).some((v) => s.words.includes(v)))
+      || MATERIALS[aWord] !== undefined || MAT_ALIAS[aWord] !== undefined
+      || CONTAINER_WORDS.includes(aWord);
+    if (f && aIsVessel) containedFluid = f.id;
+  }
   if (fluidHit && vesselLike && (/\bwith\b|\bcontain|\bfill|\bfull of\b|\bhold/.test(raw) || /\bhas\b.*\bin\b|\bhave\b.*\bin\b/.test(raw))) {
     containedFluid = fluidHit.id;
-    target = { kind: "ground", word: "ground" };
   }
+  // Cargo never doubles as the destination: a filled bucket is thrown AT the
+  // ground, not INTO a pool of its own contents.
+  if (containedFluid) target = { kind: "ground", word: "ground" };
 
   const material0 = matHit?.id ?? (action === "pour" && fluidHit ? "water" : "oak");
   // A vessel naming only its cargo gets a glass shell — transparent, so the fluid shows.
@@ -645,6 +662,7 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
   ]);
   const unknown = tokens.filter((t) =>
     !STOPWORDS.has(t) && !KNOWN_EXTRA.has(t) && !VERB_WORDS.has(t) && !SHAPE_WORDS.has(t) &&
+    MAT_ALIAS[t] === undefined && FLUID_ALIAS[t] === undefined &&
     t.length > 2 && !matched.has(t) &&
     !/^\d/.test(t) && !["mm", "cm", "km", "ft", "in", "mi", "yd", "m", "c", "f", "k", "s", "ms",
       "m/s", "km/s", "ft/s", "cm/s", "mm/s", "km/h", "kph", "mph", "fps", "knot", "knots", "kn",
