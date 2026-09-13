@@ -347,6 +347,17 @@ console.log(`\nALL ${pass} CHECKS PASSED (incl. accuracy)`);
   ok(!!e.uncertainty.capacityL && e.citations.includes("nist"), "capacity carries bars + cites");
   const e2 = experience("how much honey fits in a 2m tank");
   ok(e2.measurements.capacityL === 8000 && (e2.measurements.fluidMassKg as number) > 11000, "2 m tank of honey", JSON.stringify(e2.measurements));
+  // Contained fluids: shells carry cargo, pools stay pools.
+  const cf = neoParse("throw a cube which has water in it");
+  ok(cf.material === "glass" && cf.shape === "box" && cf.unknown.length === 0, "water cube = glass shell + core", `${cf.material}/${cf.unknown.length}`);
+  const scf = neoScenario(cf);
+  ok((scf.bodies ?? []).length === 2, "shell + core staged");
+  const bk = neoParse("throw a bucket of lava");
+  ok(bk.sizeM === 0.5 && (bk.target as { kind: string }).kind === "ground", "bucket keeps true size, no pool", `${bk.sizeM}/${(bk.target as { kind: string }).kind}`);
+  const gl = neoParse("throw a glass of water");
+  ok(gl.material === "glass", "glass of water parsed", gl.material);
+  const pl = neoParse("throw a copper cube in a lava pool");
+  ok((pl.target as { fluid?: string }).fluid === "lava" && pl.unknown.length === 0, "pool words recognized", (pl.target as { fluid?: string }).fluid);
 }
 console.log(`\nALL ${pass} CHECKS PASSED (incl. capacity)`);
 // Wave II: full acoustic table, five new materials, deform verbs.
