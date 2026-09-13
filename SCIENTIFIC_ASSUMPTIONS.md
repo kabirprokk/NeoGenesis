@@ -22,12 +22,17 @@
   temperature that can genuinely melt ice. Not a GCM.
 
 ## 3. What the engine simulates (and how honestly)
-- Rigid bodies at 120 Hz: gravity, quadratic drag, buoyancy + viscosity in
-  fluid volumes, bounce/friction, body-vs-body contact (impulse, pair
-  restitution, fracture), shatter vs ultimate strength, melt vs melt
-  point, ignition vs ignition point. All from codex tables.
-- Bodies do **not** spin and fast bodies can tunnel (no continuous collision —
-  disclosed in `docs/WORLD.md`).
+- Rigid bodies at 120 Hz: gravity, quadratic drag (wind-relative, transonic
+  Cd bump approx), buoyancy + viscosity in fluid volumes, Magnus lift for
+  spinning bodies (approx, no tumbling), bounce/friction (pair-averaged
+  restitution with a tuned ground partner), body-vs-body contact (impulse,
+  pair restitution, fracture), CCD-lite substeps against tunneling,
+  shatter vs ultimate strength, melt vs melt point, ignition vs ignition
+  point. All from codex tables except labeled tuned/approx items.
+- Slosh in carried vessels is a spring-damper tether (approx pendulum, not
+  CFD): fill fraction sets cargo mass and tether looseness. Wind is a bulk
+  air vector in every drag term. Bodies still do not tumble and fast bodies
+  past ~3 km/s / 32 substeps can still tunnel — disclosed in `docs/WORLD.md`.
 - No freeze kinetics, no corrosion kinetics: cold is staged, corrosion is a
   table timeline. Both labeled at staging time, never faked.
 - Heat transfer is real but lumped: convection in the surrounding medium
