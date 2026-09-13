@@ -57,7 +57,7 @@ const FIRE_WORD = "fire";
 
 const SHAPES: { shape: "box" | "sphere"; words: string[] }[] = [
   { shape: "box", words: ["cube", "box", "block", "crate", "brick", "dice", "ingot", "slab", "plank", "sheet", "chunk", "lump", "bar", "rod", "beam", "pipe", "plate", "disc", "coin", "tile", "panel", "pillar", "column", "anvil", "container", "vessel", "tank", "barrel", "bucket", "bin", "tub", "basin", "tray", "reservoir", "beaker", "cup", "mug", "pot", "drum", "bottle", "jar", "pail", "cask", "keg", "tote", "hopper", "silo", "cistern", "aquarium", "pyramid", "cone", "cylinder", "capsule", "torus", "wedge", "prism", "cuboid", "monolith", "obelisk"] },
-  { shape: "sphere", words: ["sphere", "ball", "orb", "marble", "globe", "bead", "droplet", "bubble", "pellet", "pebble", "boulder", "cannonball", "egg", "berry", "grape", "meteor", "asteroid", "comet", "satellite", "bowling", "golfball", "tennisball", "football", "wreckingball", "planetoid"] },
+  { shape: "sphere", words: ["sphere", "ball", "orb", "marble", "globe", "bead", "droplet", "bubble", "pellet", "pebble", "boulder", "cannonball", "egg", "berry", "grape", "meteor", "asteroid", "comet", "satellite", "bowling", "golfball", "tennisball", "football", "wreckingball", "planetoid", "balloon", "waterballoon"] },
 ];
 
 const MAT_ALIAS: Record<string, string> = {
@@ -89,6 +89,7 @@ const FLUID_ALIAS: Record<string, string> = {
   rain: "water", puddle: "water", stream: "water", creek: "water", bay: "water",
   saltwater: "seawater", salt: "seawater", brine: "seawater",
   magma: "lava", lava: "lava", volcano: "lava", moltenrock: "lava",
+  coffee: "milk", tea: "milk",
   oil: "motorOil", petrol: "motorOil", diesel: "diesel", gasoline: "motorOil", fuel: "motorOil",
   olive: "oliveOil", cooking: "oliveOil",
   syrup: "honey", molasses: "honey",
@@ -244,7 +245,7 @@ export interface NeoPlan {
   altitudeM: number | null;
   /** True when the user wants a capacity report (how much a container holds). */
   reportCapacity: boolean;
-  /** Fluid sealed INSIDE the staged body ("a cube with water in it"). */
+  /** Fluid carried INSIDE the body ("cube filled with water", "bucket of lava"). */
   containedFluid: string | null;
   /** Extra bodies from conjunctions ("steel and glass") — staged + judged together. */
   multi: NeoPlan[];
