@@ -252,7 +252,10 @@ export class PlaneWorld {
     this.group.add(this.fluidGroup);
     this.group.add(this.marker);
     this.group.add(this.rig);
-    this.rigLight = new THREE.PointLight(0xff5a00, 0, 30);
+    // Rig flash: physical decay=2 (1/d² — real propagation falloff). At lab
+    // scale light crosses the scene in microseconds, so flashes apply
+    // immediately and honestly; the engine verdicts quote the microseconds.
+    this.rigLight = new THREE.PointLight(0xff5a00, 0, 30, 2);
     this.group.add(this.rigLight);
     this.group.add(this.particles.points);
   }

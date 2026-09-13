@@ -16,8 +16,16 @@
   otherwise elsewhere in old docs is stale — this file is the truth.
 
 ## 2. Atmospheric assumptions
-- Rendering uses physically *inspired* Rayleigh + Mie scattering with
-  artist-tuned coefficients, not a full radiative-transfer solve.
+- The sky shader scatters through the real sea-level Rayleigh coefficients
+  (5.8/13.5/33.1e-6 m⁻¹, single-scatter approx) with Henyey-Greenstein Mie;
+  sunset color and the blue zenith fall out of the numbers, not paint.
+- The sun renders from real formulas: Beer–Lambert lux through Kasten–Young
+  airmass, blackbody color temperature by elevation, cloud extinction.
+  Moonlight follows phase×altitude lux with a LABELED scotopic boost
+  (gameplay readability — true moonlight needs eye-like exposure to register).
+- Light propagation between bodies is 1/d² physical decay on every dynamic
+  light; travel time itself (µs at lab scale) is quoted in blast verdicts,
+  not faked in slow motion.
 - Weather (clear/rain/storm) is a lab condition: wind/rain readouts, ambient
   temperature that can genuinely melt ice. Not a GCM.
 

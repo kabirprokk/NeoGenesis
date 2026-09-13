@@ -23,3 +23,12 @@ heat is lumped-capacitance with a Biot-number flag (Bi > 0.1 warns the core
 lags the skin — no internal conduction); and fluids are box volumes, not
 free-surface waves. Slosh inside carried vessels is an approx spring-damper
 tether (half-full sloshes loosest), not CFD.
+
+Light: the sun renders from Beer–Lambert lux + blackbody color, the moon from
+phase×altitude lux with a labeled scotopic boost (true moonlight is 10⁻⁶ of
+noon — invisible without eye-like exposure compensation), bounce light is a
+hemisphere with ground = sun × albedo, and the sky shader scatters through
+the real Rayleigh coefficients (single-scatter approx). All dynamic lights
+use physical 1/d² decay. Light crosses the 4 km plane in 13 µs ≪ one frame,
+so flashes render immediately — the blast verdicts quote the microseconds
+instead of faking travel. Moonlight casts no shadows (approx).
