@@ -83,6 +83,12 @@ export class PlayerController {
     const accel = this.grounded ? 26 : 6;
     this.vel.x += (dir.x * speed - this.vel.x) * Math.min(1, accel * dt / Math.max(1, speed));
     this.vel.z += (dir.z * speed - this.vel.z) * Math.min(1, accel * dt / Math.max(1, speed));
+    // Idle hard stop: no keys, no drift — kills asymptotic creep and phantom footsteps.
+    if (!this.keys.f && !this.keys.b && !this.keys.l && !this.keys.r) {
+      this.vel.x *= Math.max(0, 1 - 10 * dt);
+      this.vel.z *= Math.max(0, 1 - 10 * dt);
+      if (Math.hypot(this.vel.x, this.vel.z) < 0.05) { this.vel.x = 0; this.vel.z = 0; }
+    }
     if (inWater) { this.vel.x *= 0.55; this.vel.z *= 0.55; }
     if (this.keys.jump && this.grounded) { this.vel.y = 4.6; this.grounded = false; }
     this.vel.y -= this.gravity * dt;

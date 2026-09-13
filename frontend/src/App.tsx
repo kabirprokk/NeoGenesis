@@ -211,7 +211,7 @@ export default function App() {
       }
       plane.follow(player.obj.position.x, player.obj.position.z);
       strideAcc += Math.hypot(player.vel.x, player.vel.z) * dt;
-      if (strideAcc > (player.keys.run ? 2.8 : 2.1) && player.grounded) {
+      if (strideAcc > (player.keys.run ? 2.8 : 2.1) && player.grounded && Math.hypot(player.vel.x, player.vel.z) > 0.5) {
         strideAcc = 0;
         ambience.footstep(player.keys.run ? 1 : 0, 0);
       }
