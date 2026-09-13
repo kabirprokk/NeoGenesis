@@ -72,6 +72,9 @@ export default function App() {
     scene.environmentIntensity = 0.45;
     const hemi = new THREE.HemisphereLight(0xbdd3e6, 0x54503e, 0.5);
     scene.add(hemi);
+    // Scratch color for the per-frame bounce-light lerp (allocated once —
+    // the hot loop must not allocate).
+    const DAY_BLUE = new THREE.Color(0xbdd3e6);
     const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.3, 8000);
     const sky = buildGlobe(scene);
     const clouds = buildClouds(scene);
@@ -110,14 +113,11 @@ export default function App() {
       void storeSave({ playerId: PLAYER_ID, lat: player.obj.position.x, lon: player.obj.position.z, alt: 0, ...st.vitals, eraPreset: DEFAULT_ERA.id, epochMs: Date.now(), updatedAt: new Date().toISOString() });
     };
     // Neo bridge: one flow — parse → build the rig live → face it → judge.
-    const lookAt = (x: number, z: number) => {
-      const dx = x - player.obj.position.x, dz = z - player.obj.position.z;
-      player.obj.rotation.y = Math.atan2(-dx, -dz);
-    };
+    const lookAt = (x: number, z: number) => { player.lookAt(x, z); };
     apiRef.current = {
       world,
       pos: () => ({ x: player.obj.position.x, y: player.obj.position.y, z: player.obj.position.z }),
-      teleport: (x, z) => { player.obj.position.set(x, 0, z); stateRef.current.x = x; stateRef.current.z = z; },
+      teleport: (x, z) => { player.teleport(x, z, false); stateRef.current.x = x; stateRef.current.z = z; },
       lookAt,
       setTime: (h) => { simH = h; },
       setWeather: (kind) => { weatherOverride.current = kind; },
@@ -149,8 +149,9 @@ export default function App() {
             : plan.action === "electrify" ? "spark"
             : plan.action === "lase" ? "laser" : null;
           plane.setRig(rig, ax, az, Math.min(2, Math.max(0.2, plan.sizeM)));
-          // Viewpoint: step back and face the rig — the experiment stays on screen.
-          player.obj.position.set(ax - fwd.x * 14, 0, az - fwd.z * 14);
+          // Viewpoint: step back and face the rig — velocity killed and view
+          // leveled inside teleport, so the experiment starts framed, not drifting.
+          player.teleport(ax - fwd.x * 14, az - fwd.z * 14, true);
           lookAt(ax, az);
           stateRef.current.x = player.obj.position.x; stateRef.current.z = player.obj.position.z;
           watchBus.want = true;
@@ -203,11 +204,11 @@ export default function App() {
         if (p.x > f.min.x && p.x < f.max.x && p.z > f.min.z && p.z < f.max.z && p.y < f.max.y) { inWater = true; break; }
       }
       player.update(dt, 0, inWater, cols.length ? { colliders: cols } : undefined);
-      // Impact screen-shake from the particle rig (decays on its own).
+      // Impact shake kicks the pitch holder (decays inside the controller) —
+      // writing camera.position here used to fight the head-bob overwrite.
       const sh = plane.consumeShake();
       if (sh > 0.02) {
-        camera.position.x += (Math.random() - 0.5) * sh * 0.35;
-        camera.position.y += (Math.random() - 0.5) * sh * 0.3;
+        player.kick((Math.random() - 0.5) * sh * 0.12, (Math.random() - 0.5) * sh * 0.1);
       }
       plane.follow(player.obj.position.x, player.obj.position.z);
       strideAcc += Math.hypot(player.vel.x, player.vel.z) * dt;
@@ -216,12 +217,24 @@ export default function App() {
         ambience.footstep(player.keys.run ? 1 : 0, 0);
       }
 
-      // Sky + sun shadow frustum follows the player.
-      const skyInfo = updateSky(sky, epoch, GEO.lat, GEO.lon);
+      // Sky + sun shadow frustum follows the player. Sun/moon intensities and
+      // colors come from real formulas (Beer–Lambert lux, blackbody tint);
+      // the hemisphere below IS the bounce light: sky ambient from above,
+      // ground color = sun × ground albedo from below. IBL + exposure follow
+      // daylight so studio reflections die at midnight. No per-frame allocs.
+      const skyInfo = updateSky(sky, epoch, GEO.lat, GEO.lon, wx.cloud01);
       clouds.tick(dt, sky.sun.intensity < 0.4 ? 1 : 0);
       sky.sun.position.copy(player.obj.position).addScaledVector(skyInfo.sunDir, 400);
       sky.sun.target.position.copy(player.obj.position);
       sky.sun.target.updateMatrixWorld();
+      sky.moon.target.position.copy(player.obj.position);
+      sky.moon.target.updateMatrixWorld();
+      const dayF = skyInfo.dayFactor;
+      hemi.intensity = 0.06 + 0.55 * dayF;
+      hemi.color.setHex(0x0a1226).lerp(DAY_BLUE, dayF);
+      hemi.groundColor.copy(sky.sun.color).multiplyScalar(0.04 + 0.42 * dayF);
+      scene.environmentIntensity = 0.03 + 0.42 * dayF;
+      renderer.toneMappingExposure = 1.02 + 0.25 * skyInfo.nightFactor;
       const night = sky.sun.intensity < 0.4;
       scene.fog = new THREE.FogExp2(night ? 0x05070c : wx.storm ? 0x6b7683 : 0x9db3c8, night ? 0.0022 : 0.0016 + wx.fog01 * 0.004);
 
