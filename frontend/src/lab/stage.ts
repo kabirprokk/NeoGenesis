@@ -134,13 +134,19 @@ export function stageNeo(world: EngineWorld, plan: NeoPlan, ax: number, az: numb
         }
         if (p.containedFluid) {
           const coreMat = MATERIALS[p.containedFluid] ? p.containedFluid : "water";
-          // Core rides 4% smaller so it reads through the shell (no z-fighting),
-          // same mass so ballistics match and they fly as one.
-          spawnBody({ shape: p.shape, material: coreMat, sizeM: psize * 0.96,
-            pos: { x: X - backoff, y: surfaceY + pH, z: az }, vel: { x: vx0, y: vy0, z: 0 },
-            dragProfile: p.shape === "sphere" ? "sphere" : "cube",
-            massOverrideKg: b.massKg });
-          lines.push(`${tag}${FLUIDS[p.containedFluid].name} sealed inside — visible core flies with the shell, splashes apart on impact`);
+          const fill = p.fillFrac ?? 1;
+          if (fill <= 0) {
+            lines.push(`${tag}vessel goes up EMPTY — shell only`);
+          } else {
+            // Core rides smaller with headspace (fill-scaled, no z-fighting),
+            // tethered live in the verdict sim (approx slosh, not CFD).
+            const coreSize = psize * 0.96 * Math.cbrt(Math.min(1, fill));
+            spawnBody({ shape: p.shape, material: coreMat, sizeM: Math.max(0.05, coreSize),
+              pos: { x: X - backoff, y: surfaceY + pH, z: az }, vel: { x: vx0, y: vy0, z: 0 },
+              dragProfile: p.shape === "sphere" ? "sphere" : "cube",
+              massOverrideKg: b.massKg });
+            lines.push(`${tag}${FLUIDS[p.containedFluid].name} sealed inside (${Math.round(fill * 100)}% full) — visible core flies with the shell, sloshes, splashes apart on impact`);
+          }
         }
         break;
       }
@@ -267,11 +273,19 @@ export function stageNeo(world: EngineWorld, plan: NeoPlan, ax: number, az: numb
         const b = spawnBody({ shape: p.shape, material: p.material, sizeM: psize,
           pos: { x: X, y: surfaceY + pH, z: az } });
         lines.push(`${tag}${pmat.name} ${p.shape} (${b.massKg.toFixed(0)} kg) released from ${ptrueH} m`);
+        if (p.spin && (p.spin[0] || p.spin[1] || p.spin[2])) {
+          lines.push(`${tag}spinning [${p.spin.join(", ")}] rad/s — Magnus curve live (bodies lift, they don't tumble)`);
+        }
         if (p.containedFluid) {
           const coreMat = MATERIALS[p.containedFluid] ? p.containedFluid : "water";
-          spawnBody({ shape: p.shape, material: coreMat, sizeM: psize * 0.96,
-            pos: { x: X, y: surfaceY + pH, z: az }, massOverrideKg: b.massKg });
-          lines.push(`${tag}${FLUIDS[p.containedFluid].name} sealed inside — visible core rides along, splashes apart on impact`);
+          const fill = p.fillFrac ?? 1;
+          if (fill <= 0) {
+            lines.push(`${tag}vessel falls EMPTY — shell only`);
+          } else {
+            spawnBody({ shape: p.shape, material: coreMat, sizeM: Math.max(0.05, psize * 0.96 * Math.cbrt(Math.min(1, fill))),
+              pos: { x: X, y: surfaceY + pH, z: az }, massOverrideKg: b.massKg });
+            lines.push(`${tag}${FLUIDS[p.containedFluid].name} sealed inside (${Math.round(fill * 100)}% full) — visible core rides along, sloshes, splashes apart on impact`);
+          }
         }
         if (p.target.kind === "fluid" && p.target.fluid) {
           const f = FLUIDS[p.target.fluid];
