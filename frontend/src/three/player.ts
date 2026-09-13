@@ -26,6 +26,28 @@ export class PlayerController {
     this.keys = { f: false, b: false, l: false, r: false, run: false, crouch: false, jump: false };
     this.vel.set(0, 0, 0);
   }
+  /** Impact shake: kicks the PITCH holder, never the camera — head-bob owns
+   * camera.position.x and used to overwrite shake offsets every frame, which
+   * erased horizontal shake and leaked vertical shake into the eye lerp. */
+  kick(x: number, y: number): void {
+    this.pitch.position.x += x;
+    this.pitch.position.y += y;
+  }
+  /** Face a world point (yaw only). Pitch is the player's eyes — left alone. */
+  lookAt(x: number, z: number): void {
+    const dx = x - this.obj.position.x, dz = z - this.obj.position.z;
+    this.obj.rotation.y = Math.atan2(-dx, -dz);
+  }
+  /** Teleport feet to (x, z): kills velocity (no arrival drift) and optionally
+   * levels the view so experiments start framed, not staring at old sky. */
+  teleport(x: number, z: number, levelView: boolean): void {
+    this.obj.position.set(x, 0, z);
+    this.vel.set(0, 0, 0);
+    if (levelView) {
+      this.pitch.rotation.x = 0;
+      this.pitch.position.set(0, 0, 0);
+    }
+  }
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
     this.obj.add(this.pitch);
@@ -123,9 +145,13 @@ export class PlayerController {
     if (this.obj.position.y + this.camera.position.y < minEye) {
       this.obj.position.y = minEye - this.camera.position.y;
     }
-    // Subtle head-bob (weight, not shake)
+    // Subtle head-bob (weight, not shake). Owns camera.position.x outright —
+    // impact shake lives on the pitch holder (see kick()), never here.
     const hSpeed = Math.hypot(this.vel.x, this.vel.z);
     const t = performance.now() / 1000;
     this.camera.position.x = Math.sin(t * (4 + hSpeed)) * 0.018 * Math.min(1, hSpeed / 4);
+    // Shake decay: pitch offset relaxes to zero each frame.
+    this.pitch.position.multiplyScalar(Math.max(0, 1 - 7 * dt));
+    if (this.pitch.position.lengthSq() < 1e-8) this.pitch.position.set(0, 0, 0);
   }
 }
