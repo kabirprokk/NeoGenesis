@@ -7,7 +7,7 @@ the engine lives it with real numbers, and a verdict comes out.
 ## The invention loop
 ```
 prompt ("drop an oak crate from 100m")
-  → experience() builds bodies from the 12,000-model registry
+  → experience() builds bodies from the 19.2M-model registry
   → EngineWorld steps real gravity, drag, impact stress, melt, friction
   → verdict: REAL / NOT REAL / MIXED + measurements + sensory trace + reasons
 ```
@@ -33,7 +33,7 @@ echo '{"bodies":[{"material":"glass","heightM":50}],"checks":[{"kind":"survives-
   buoyancy, sound delay, incline slide, repose, viscous drag
 - `world.ts` — flat plane world, 120 Hz fixed step, deterministic; bounce/friction/
   shatter/melt/ignite verdicts live here
-- `models.ts` — 12,000 deterministic registry entries (12 classes × 10 materials ×
-  10 sizes × 10 configs), addressable by index, spawnable into any world
+- `models.ts` — 19,200,000 deterministic registry entries (24 classes × 20 materials ×
+  16 sizes × 10 configs × 10 fills × 25 cosmetic liveries), addressable by index, spawnable into any world
 - `experience.ts` — prompt parser (7 scenario families) + JSON scenario runner
 - `cli.ts` — terminal interface for humans and agents alike

@@ -19,3 +19,7 @@ Thumbs.db
 !.vscode/extensions.json
 # local tool output
 .local/
+# dev-play artifacts (screenshots, run reports — regenerate with node connect.mjs)
+dev-play/shots/
+dev-play/LAST_RUN.md
+dev-play/server.log

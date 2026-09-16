@@ -30,30 +30,47 @@ const MATERIAL_VISUAL: Record<string, { metalness: number; roughness: number; op
 const visualOf = (id: string) => MATERIAL_VISUAL[id] ?? { metalness: 0.05, roughness: 0.85 };
 
 function gridTexture(): THREE.CanvasTexture {
-  // Natural ground: layered soft blotches over an olive-tan base, then grain.
-  // No grid lines — the plane reads as terrain, not graph paper.
+  // Natural ground: broad soft macro-patches, mid blotches, then a whisper
+  // of grain (the old heavy speckle read as confetti — caught live in-game).
   const c = document.createElement("canvas");
   c.width = 512; c.height = 512;
   const g = c.getContext("2d")!;
-  g.fillStyle = "#7d8159"; g.fillRect(0, 0, 512, 512);
-  const tones = ["#6b7a4a", "#87915c", "#9a9a6e", "#8a7355", "#758052", "#6f7d52"];
-  for (let i = 0; i < 420; i++) {
-    const x = Math.random() * 512, y = Math.random() * 512, r = 8 + Math.random() * 42;
-    const col = tones[Math.floor(Math.random() * tones.length)];
-    const grad = g.createRadialGradient(x, y, 0, x, y, r);
-    grad.addColorStop(0, col + "cc");
-    grad.addColorStop(1, col + "00");
-    g.fillStyle = grad;
-    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  g.fillStyle = "#6f744e"; g.fillRect(0, 0, 512, 512);
+  const macro = ["#66703f", "#7f8f57", "#8a7355"];
+  // Wrapped drawing (3×3 offsets): blotches crossing an edge continue on the
+  // opposite side, so the repeat shows no seams (caught live in-game).
+  const blot = (x: number, y: number, r: number, col: string, alpha: string): void => {
+    for (let ox = -1; ox <= 1; ox++) {
+      for (let oy = -1; oy <= 1; oy++) {
+        const grad = g.createRadialGradient(x + ox * 512, y + oy * 512, 0, x + ox * 512, y + oy * 512, r);
+        grad.addColorStop(0, col + alpha);
+        grad.addColorStop(1, col + "00");
+        g.fillStyle = grad;
+        g.beginPath(); g.arc(x + ox * 512, y + oy * 512, r, 0, Math.PI * 2); g.fill();
+      }
+    }
+  };
+  for (let i = 0; i < 40; i++) {
+    const macroTones = macro[Math.floor(Math.random() * macro.length)];
+    blot(Math.random() * 512, Math.random() * 512, 90 + Math.random() * 130, macroTones, "66");
   }
-  for (let i = 0; i < 5200; i++) {
-    const v = 100 + Math.floor(Math.random() * 60);
-    g.fillStyle = `rgba(${v},${v + 6},${v - 18},0.5)`;
+  // Sparse dirt: dry-earth patches break the green wash.
+  for (let i = 0; i < 24; i++) {
+    blot(Math.random() * 512, Math.random() * 512, 60 + Math.random() * 80, "#6b5b3e", "44");
+  }
+  const tones = ["#66703f", "#7f8f57", "#9a9a6e", "#8a7355", "#758052", "#a8a06b"];
+  for (let i = 0; i < 300; i++) {
+    const col = tones[Math.floor(Math.random() * tones.length)];
+    blot(Math.random() * 512, Math.random() * 512, 10 + Math.random() * 60, col, "99");
+  }
+  for (let i = 0; i < 2500; i++) {
+    const v = 105 + Math.floor(Math.random() * 40);
+    g.fillStyle = `rgba(${v},${v + 8},${v - 14},0.22)`;
     g.fillRect(Math.random() * 512, Math.random() * 512, 2, 2);
   }
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(400, 400);
+  t.repeat.set(250, 250);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
 }
@@ -315,6 +332,13 @@ export class PlaneWorld {
         this.meshes.set(b.id, m);
       }
       m.position.set(b.pos.x, b.pos.y, b.pos.z);
+      const u0 = (m as THREE.Object3D & { userData: Record<string, unknown> }).userData;
+      // Tumble: the engine integrates orientation from spin — the mesh shows it.
+      // Shatter-tilt adds on top (stored once, applied every frame).
+      m.rotation.set(
+        b.rot.x + ((u0.tiltX as number) ?? 0),
+        b.rot.y + ((u0.tiltY as number) ?? 0),
+        b.rot.z + ((u0.tiltZ as number) ?? 0));
       const mat = (m as THREE.Mesh).material as THREE.MeshStandardMaterial;
       const u = (m as THREE.Object3D & { userData: Record<string, unknown> }).userData;
       if (b.broken && !u.crushed) { u.crushed = true; m.scale.y *= 0.45; mat.color.multiplyScalar(0.55); }
@@ -498,10 +522,13 @@ export class PlaneWorld {
         m.scale.set(1 + 0.25 * k, crushed * (1 - 0.3 * k), 1 + 0.25 * k);
         if ((u.squashT as number) <= 0 && !b.molten) m.scale.set(1, crushed, 1);
       }
-      // Shattered shards settle with a slight tilt — wreckage reads as wreckage.
+      // Shattered shards keep a slight tilt — wreckage reads as wreckage.
+      // Stored as offsets; the per-frame rotation above adds engine tumble.
       if (b.broken && !u.tilted) {
         u.tilted = true;
-        m.rotation.set((Math.random() - 0.5) * 0.35, Math.random() * Math.PI, (Math.random() - 0.5) * 0.35);
+        u.tiltX = (Math.random() - 0.5) * 0.35;
+        u.tiltY = Math.random() * Math.PI;
+        u.tiltZ = (Math.random() - 0.5) * 0.35;
       }
     }
   }

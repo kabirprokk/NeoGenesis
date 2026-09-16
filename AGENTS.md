@@ -1,5 +1,8 @@
 # AGENTS.md — how an AI agent fulfills NeoGenesis user requests
 
+> New here? Read `NEOGENESIS_RULES.md` first — it holds the laws that never
+> change. This file is the instrument manual.
+
 You (the agent) have three instruments. Use them in this order.
 
 ## 1. Tools — do things (`C:\NeoGenesis\engine\src\tools.ts`, 36 tools)
@@ -24,6 +27,13 @@ The plane world runs the same engine. To put a result in front of the user:
 ## Laws
 1. REAL only when numbers clear thresholds. MIXED + named gap > guessed REAL.
 2. Only `restitution` is tuned (labeled); everything else is codex table data.
-3. 12,000 models via `model-get`/`model-search`/`model-spawn` — deterministic by index.
+3. 19,200,000 models via `model-get`/`model-search`/`model-spawn` — deterministic by index.
 4. ONE HUMAN rule stands: bodies and tools are objects, never NPCs.
-5. `npm test` in `engine/` must stay green (86 checks). Add a check when you add physics.
+5. `npm test` in `engine/` must stay green (234 checks). Add a check when you add physics.
+
+## 4. Playtesting like a player (GAMEPLAY.md + demo mode)
+Unit tests catch code errors, never feel. Before calling game feel done:
+play it — headlessly via `GAMEPLAY.md`'s sweep, or press G in-game and watch
+`aiPlayer.ts` drive the body (keys + camera + Ask/Run only, never commands).
+File findings in GAMEPLAY.md's format, fix at the root, re-verify all three:
+engine suite + `npm run typecheck` + frontend build.

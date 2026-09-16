@@ -5,6 +5,8 @@ import { runTool, TOOLS } from "../../../engine/src/index.js";
 import type { EngineWorld } from "../../../engine/src/index.js";
 import type { NeoPlan } from "../../../engine/src/index.js";
 import type { ExperienceResult } from "../../../engine/src/index.js";
+import type { NeoFacts } from "./neoMind.js";
+import type { InjectorState } from "./neoBody.js";
 
 export interface NeoRunResult {
   plan: NeoPlan | null; verdict: ExperienceResult; staged: string[] | null;
@@ -22,10 +24,40 @@ export interface GameCtx {
   doSave: () => void;
   /** One flow: parse → build the rig in the live world → face it → judge. */
   runExperiment: (prompt: string) => NeoRunResult;
+  /** Live senses Neo feels right now (temperature, wind, sun, bodies…). */
+  sense: () => NeoFacts;
+  /** Talk to Neo's generative mind — novel wording, true numbers, learns. */
+  chat: (question: string) => string;
+  /** Raw pre-speech thought trace (read-only, for the visualizer). */
+  think: (question: string) => string[];
+  /** Ring buffer of recent inner lines (thoughts + dreams). */
+  thoughtLog: () => string[];
+  /** Run the sleep/dream consolidation now. */
+  dream: () => string;
+  /** Inspectable mind+body summary line. */
+  innerState: () => string;
+  /** Unprompted utterance Neo initiated while idle (consumed on read). */
+  proposal: () => string | null;
+  /** Last phrasing distribution actually sampled (for the visualizer). */
+  candidates: () => { text: string; p: number }[];
+  /** Scientist injector: read synthetic biometric overrides. */
+  injector: () => InjectorState;
+  /** Set injector overrides (empty = clear back to natural). */
+  setInjector: (patch: Partial<InjectorState>) => unknown;
+  /** Current mind profile name. */
+  mindProfile: () => string;
+  /** Hot-swap mind profile mid-sim. Returns false if unknown. */
+  setMindProfile: (name: string) => boolean;
 }
 
 // Live event stream: App drains world.log into fn while want is true.
 export const watchBus: { fn: null | ((lines: string[]) => void); want: boolean } = { fn: null, want: false };
+
+/** Experiment-shaped language → the reality engine must judge it. */
+export const EXPERIMENT_RE = /(throw|drop|melt|freeze|burn|boil|crush|float|sink|slide|scratch|blast|build|pour|electrify|dissolve|laser|lase|roll|orbit|launch|hurl|toss|fling|shoot|yeet|lob|chuck|heave|sling|catapult|smash|shatter|explode|detonate|erupt|corrode|plummet|plunge|nosedive|fell|land|crash|collide|ram|cannon|duel|volcano|magma|lift|carry|heft|surviv|versus|\bvs\b|which|stronger|better|spinn|whirl|slip|skid|glide|coast|avalanche|rain )/i;
+
+/** Small-talk + live-sense questions → Neo's generative mind answers. */
+export const CHAT_RE = /^(hi|hey|hello|yo|sup|howdy|good\s?(morning|evening|afternoon)|thanks|thank|bye|goodbye|good ?night)\b|who are you|your name|what are you|what can you do|how are you|how do you feel|my name is|call me|remember |temperatur|how (hot|cold|warm|cool)|feels like|degree|°c\b|weather|raining|rainy|storming|stormy|windy|cloudy|humid|foggy|climate|what time|is it (day|night|dark|light)|time is it|where am i|where are we|my position|my location|surround|around (me|us|here)|what do you see|nearby/i;
 
 const SKILLS = ["drop-test", "material-showdown", "planet-survey", "float-or-sink",
   "scratch-ladder", "blast-analysis", "friction-audit", "thermal-sweep"];
@@ -102,17 +134,24 @@ export function execCommand(raw: string, g: GameCtx): string[] {
   const h = head.toLowerCase();
 
   if (h === "help") return [
+    "talk: ask <anything> | neo <anything> — Neo's generative mind, learns you |",
+    "sense | feel — everything Neo feels right now (temp, wind, sun, bodies) |",
+    "think <q> — raw pre-speech trace | dream — sleep consolidation now |",
+    "inner — mind+body summary | B — brain visualizer square |",
+    "scientist: profile [name] — hot-swap mind (steady/volatile/terse/dreamy/feral) |",
+    "inject <hr|temp|arousal|valence|dominance> <value> | inject clear |",
     "commands: do <experiment> (STAGE it live) | verdict <prompt> | ai <question> |",
     "neo understands follow-ups: `again, but on Mars` · `make it heavier` ·",
     "`twice as big` · `no, I meant steel` · `if the glass breaks, drop steel` ·",
     "`who lands first` · `over the wall` · `half-full` · `with backspin` |",
     "spawn-body <mat> <size> [height] | cannon <mat> [speed] | rain <mat> [n] |",
-    "fireworks | volcano | duel <matA> <matB> | bodies | sim <s> | events | watch |",
+    "fireworks | volcano | duel <matA> <matB> | fun [meteor|anvils|shower|eruption|duel] |",
+    "bodies | sim <s> | events | watch |",
     "gravity <planet|value> | ambient <C> | planet <id> | teleport <x> <z> | time <h> |",
     "weather <clear|rain|storm> | journal <text> | save | whereami | remove <id> | reset |",
     "tool <name> <json> | tools | skills | clear | json <prompt> (full verdict JSON for lab notebooks) |",
     "csv <prompt> (trace spreadsheet) | runs (provenance log) | diff <a> <b> (rerun diff) | cite [ids] (BibTeX)",
-    "anything else ending in ? is judged as an experiment.",
+    "plain talk (no action verbs) goes to Neo's mind; action sentences run experiments.",
   ];
   if (h === "tools") return TOOLS.map((t) => `${t.name} — ${t.description}`);
   if (h === "skills") return SKILLS.map((s) => `${s} — see skills/${s}/SKILL.md`);
@@ -182,6 +221,42 @@ export function execCommand(raw: string, g: GameCtx): string[] {
     }
     return [`volcano at ${ax.toFixed(0)}, ${az.toFixed(0)} — live lava pool + erupting granite bombs`];
   }
+  if (h === "fun") {
+    const kind = (tail || "surprise").toLowerCase();
+    const p = g.pos();
+    const pick = kind === "surprise" ? ["meteor", "anvils", "shower", "eruption"][Math.floor(Math.random() * 4)] : kind;
+    if (pick === "meteor") {
+      for (let i = 0; i < 5; i++) {
+        g.world.spawn({ shape: "sphere", material: "granite", sizeM: 0.4 + Math.random() * 0.5,
+          pos: { x: p.x + (Math.random() - 0.5) * 40, y: 50 + Math.random() * 30, z: p.z - 15 - Math.random() * 20 },
+          vel: { x: (Math.random() - 0.5) * 10, y: -20 - Math.random() * 15, z: 5 + Math.random() * 8 },
+          tempC: 800, dragProfile: "sphere" });
+      }
+      return ["meteor strike incoming — burning granite, look up and run"];
+    }
+    if (pick === "anvils" || pick === "anvil") {
+      for (let i = 0; i < 6; i++) {
+        g.world.spawn({ shape: "box", material: "iron", sizeM: 0.5,
+          pos: { x: p.x + (Math.random() - 0.5) * 24, y: 35 + Math.random() * 20, z: p.z + (Math.random() - 0.5) * 24 } });
+      }
+      return ["anvil rain — 6 iron blocks falling around you (each ~200 kg). They shove, not you"];
+    }
+    if (pick === "shower" || pick === "gold") {
+      for (let i = 0; i < 8; i++) {
+        g.world.spawn({ shape: "sphere", material: i % 2 ? "gold" : "glass", sizeM: 0.2 + Math.random() * 0.2,
+          pos: { x: p.x + (Math.random() - 0.5) * 20, y: 30 + Math.random() * 20, z: p.z - 8 - Math.random() * 12 },
+          dragProfile: "sphere" });
+      }
+      return ["gold-and-glass shower — catch the verdict: which shatters, which survives"];
+    }
+    if (pick === "eruption" || pick === "volcano") {
+      return execCommand("volcano", g);
+    }
+    if (pick === "duel") {
+      return execCommand("duel steel glass", g);
+    }
+    return ["fun meteor | fun anvils | fun shower | fun eruption | fun duel — or just `fun` and feel lucky"];
+  }
   if (h === "duel") {
     const [matA = "steel", matB = "glass"] = rest;
     const p = g.pos();
@@ -239,6 +314,47 @@ export function execCommand(raw: string, g: GameCtx): string[] {
     const log = g.world.log.slice(-8);
     return log.length ? log.map((l) => `! ${l}`) : ["no events yet — stage something with `do`"];
   }
+  if (h === "ask" || h === "neo" || h === "chat" || h === "talk") {
+    if (!tail) return ["talk to me — `ask what is the temperature?`"];
+    return [`neo: ${g.chat(tail)}`];
+  }
+  if (h === "sense" || h === "feel" || h === "senses") {
+    const s = g.sense();
+    return [
+      `neo feels: ${s.tempC.toFixed(1)}°C (feels ${s.feelsLikeC.toFixed(1)}°C, ${s.feelWord}) · wind ${s.windMs.toFixed(1)} m/s · humidity ${Math.round(s.humidity01 * 100)}% · ${s.weatherKind}`,
+      `sky: ${s.night ? "night" : `sun ${s.sunAlt.toFixed(0)}°, ${Math.round(s.sunLux).toLocaleString()} lux`} · ${s.timeStr} · gravity ${s.gravity.toFixed(2)} m/s² · at x=${s.posX.toFixed(0)}, z=${s.posZ.toFixed(0)}`,
+      `body: heart ${Math.round(s.heartBpm)} BPM · ${s.mood}${s.undertone ? ` + ${s.undertone}` : ""} · arousal ${s.arousal01.toFixed(2)} · dominance ${s.dominance01.toFixed(2)}`,
+      s.bodyCount ? `bodies (${s.bodyCount}): ${s.bodies.slice(0, 4).join(" · ")}` : "bodies: open plane, nothing staged",
+      s.fluids.length ? `fluids: ${s.fluids.join(" · ")}` : "fluids: none",
+      g.innerState(),
+    ];
+  }
+  if (h === "think") {
+    if (!tail) return ["think what? — `think is it going to storm?` shows the raw trace"];
+    return g.think(tail);
+  }
+  if (h === "dream") return [g.dream()];
+  if (h === "inner" || h === "mind") return [g.innerState(), ...g.thoughtLog().slice(-4)];
+  if (h === "profile") {
+    if (!tail) return [`mind profile: ${g.mindProfile()} — steady/volatile/terse/dreamy/feral`];
+    return [g.setMindProfile(tail) ? `mind profile → ${g.mindProfile()} (live, wording warps now)` : `unknown profile "${tail}" — steady/volatile/terse/dreamy/feral`];
+  }
+  if (h === "inject") {
+    const [slot = "", val = ""] = rest;
+    if (!slot || slot === "show") return [`injector: ${JSON.stringify(g.injector())} (synthetic overrides; empty = natural)`];
+    if (slot === "clear") { g.setInjector({ hrBpm: null, tempDeltaC: 0, arousalDelta: 0, valenceDelta: 0, dominanceDelta: 0 }); return ["injector cleared — Neo feels only the world again"]; }
+    const n = parseFloat(val);
+    if (Number.isNaN(n)) return [`inject ${slot} needs a number — e.g. \`inject hr 150\``];
+    const patch: Record<string, number | null> = {};
+    if (slot === "hr" || slot === "heart") patch.hrBpm = Math.min(200, Math.max(35, n));
+    else if (slot === "temp") patch.tempDeltaC = Math.min(15, Math.max(-10, n));
+    else if (slot === "arousal") patch.arousalDelta = Math.min(0.6, Math.max(-0.6, n));
+    else if (slot === "valence") patch.valenceDelta = Math.min(0.6, Math.max(-0.6, n));
+    else if (slot === "dominance") patch.dominanceDelta = Math.min(0.6, Math.max(-0.6, n));
+    else return [`unknown slot "${slot}" — hr|temp|arousal|valence|dominance`];
+    g.setInjector(patch);
+    return [`injected ${slot}=${n} (synthetic — the world itself is untouched)`, g.innerState()];
+  }
   if (h === "ai") {
     const q = tail;
     const skill = SKILL_FOR.find(([re]) => re.test(q))?.[1] ?? null;
@@ -269,7 +385,14 @@ export function execCommand(raw: string, g: GameCtx): string[] {
     if (!r.ok) return [`error: ${JSON.stringify(r.result)}`];
     return [JSON.stringify(r.result)];
   }
-  // Default: questions and experiment-shaped sentences get judged.
-  if (/[?]$/.test(cmd) || /^(is|can|does|would|will|what|how|should)/i.test(cmd)) return verdictLines(cmd, false);
-  return [`unknown command — try: help | verdict <prompt> | ai <question>`];
+  // Default: experiments run unless the line is clearly small-talk/senses.
+  // Questions stay judgeable (the lab judges "can X?", "is Y?"); anything
+  // else unrecognized gets guidance — never a junk verdict (a bare
+  // "whereami"-with-typo must not come back as "survives a 50 m fall").
+  if (EXPERIMENT_RE.test(cmd)) return verdictLines(cmd, false);
+  if (CHAT_RE.test(cmd)) {
+    try { return [`neo: ${g.chat(cmd)}`]; } catch { return verdictLines(cmd, false); }
+  }
+  if (/[?]$/.test(cmd) || /^(is|can|does|would|will|what|how|should)\b/i.test(cmd)) return verdictLines(cmd, false);
+  return [`unknown command "${head}" — try: help | ask <question> | verdict <prompt> | do <experiment>`];
 }

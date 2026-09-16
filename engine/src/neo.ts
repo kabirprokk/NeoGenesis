@@ -225,12 +225,26 @@ function escRe(s: string): string {
 
 // English morphology for understanding real sentences: plurals ("cubes",
 // "tanks", "wires"), third-person verbs ("shatters", "melts", "drops"),
-// -ies forms ("batteries"). Direct hits always win; stems are fallback.
+// -ies forms ("batteries"), verb gerunds ("erupting"→"erupt",
+// "melting"→"melt", "freezing"→"freeze", "dropping"→"drop") and past tense
+// ("melted"→"melt", "exploded"→"explode"). Direct hits always win; stems are
+// fallback. Doubled consonants collapse ("running"→"run", "sitting"→"sit").
 function wordVariants(t: string): string[] {
   const out = [t];
   if (t.length > 4 && t.endsWith("ies")) out.push(t.slice(0, -3) + "y");
   if (t.length > 3 && t.endsWith("s")) out.push(t.slice(0, -1));
   if (t.length > 4 && t.endsWith("es")) out.push(t.slice(0, -2));
+  if (t.length > 5 && t.endsWith("ing")) {
+    const stem = t.slice(0, -3);
+    out.push(stem, stem + "e");
+    if (/([^aeiou])\1$/.test(stem)) out.push(stem.slice(0, -1));
+  }
+  if (t.length > 4 && t.endsWith("ed")) {
+    const stem = t.slice(0, -2);
+    out.push(stem, stem + "e");
+    if (/([^aeiou])\1$/.test(stem)) out.push(stem.slice(0, -1));
+    if (t.endsWith("ied")) out.push(t.slice(0, -3) + "y");
+  }
   return [...new Set(out)];
 }
 
@@ -831,7 +845,14 @@ export function neoParse(input: string, mem: NeoMemory | null = null, depth = 0)
       || CONTAINER_WORDS.includes(aWord);
     if (f && aIsVessel) containedFluid = f.id;
   }
-  if (fluidHit && vesselLike && (/\bwith\b|\bcontain|\bfill|\bfull of\b|\bhold/.test(raw) || /\bhas\b.*\bin\b|\bhave\b.*\bin\b/.test(raw))) {
+  // Cargo needs content-language ("filled with", "full of", "holds", "has in").
+  // Bare "with" counts for carriable fluids ("a copper box with oil") but NOT
+  // when the fluid is the location itself: eruption words or volcano-family
+  // fluids ("a volcano erupting with a huge box on it") mean the body sits AT
+  // the fluid, so the target must stay a live pool, never become cargo.
+  const locationFluid = !!fluidHit && /^(lava|magma)$/.test(fluidHit.id);
+  const eruptCtx = /\berupt|\bvolcano|\bmagma\b/.test(raw);
+  if (fluidHit && vesselLike && !locationFluid && !eruptCtx && (/\bwith\b|\bcontain|\bfill|\bfull of\b|\bhold/.test(raw) || /\bhas\b.*\bin\b|\bhave\b.*\bin\b/.test(raw))) {
     containedFluid = fluidHit.id;
   }
   // Cargo never doubles as the destination: a filled bucket is thrown AT the

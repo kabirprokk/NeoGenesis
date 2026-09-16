@@ -80,8 +80,11 @@ export function moonState(dateUtc: Date, lat: number, lon: number): MoonState {
 }
 
 // Deterministic star field seed helper (actual rendering in frontend).
+// Integer hash with unsigned wrap: always in [0, 1). (The old float version
+// went negative past 2^53, placed stars off-shell and poisoned positions
+// with NaN via sqrt of a negative — caught live in the browser.)
 export function starSeed(index: number): number {
-  let h = index * 2654435761 % 4294967296;
-  h ^= h >>> 15; h = (h * 2246822519) % 4294967296; h ^= h >>> 13;
-  return (h % 100000) / 100000;
+  let h = (index * 2654435761) % 4294967296;
+  h ^= h >>> 15; h = Math.imul(h, 2246822519); h ^= h >>> 13;
+  return (h >>> 0) / 4294967296;
 }

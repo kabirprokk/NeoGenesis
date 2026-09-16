@@ -45,14 +45,21 @@ ok(MATERIALS.gold.density === 19300 && FLUIDS.honey.viscosity === 10.0, "materia
   w.run(4);
   ok(!w.bodies[0].broken, "oak survives 3 m");
 }
-// Registry: 12,000 deterministic models.
-ok(MODEL_COUNT === 12000, "12k registry");
+// Registry: 19,200,000 deterministic models (24 classes × 20 materials ×
+// 16 sizes × 10 configs × 10 fills × 25 cosmetic liveries).
+ok(MODEL_COUNT === 19200000, "19.2M registry");
 {
   const a = getModel(4242), b = getModel(4242);
   ok(a.id === b.id && a.massKg === b.massKg && a.id === "NEO-5243", "deterministic registry", a.id);
   const w = new EngineWorld();
   spawnModel(w, 4242, { x: 0, y: 5, z: 0 });
   ok(w.bodies.length === 1 && w.bodies[0].id === "NEO-5243", "spawn by index");
+  const hi = getModel(MODEL_COUNT - 1), hi2 = getModel(MODEL_COUNT - 1);
+  ok(hi.id === hi2.id && hi.massKg === hi2.massKg && hi.livery === "L25", "top-index deterministic", hi.id);
+  const hollow = getModel(0), loaded = getModel(24 * 20 * 16 * 10 * 9);
+  ok(loaded.massKg > hollow.massKg && loaded.volumeM3 === hollow.volumeM3, "fill moves mass, not volume");
+  const paintA = getModel(7), paintB = getModel(7 + 24 * 20 * 16 * 10 * 10);
+  ok(paintA.massKg === paintB.massKg && paintA.livery !== paintB.livery, "livery is cosmetic only");
 }
 // Experience verdicts.
 {
@@ -230,6 +237,45 @@ console.log(`\nALL ${pass} CHECKS PASSED (incl. data-set-1)`);
   ok(!w.log.some((l) => l.includes("came to rest")), "spawned-at-rest bodies stay quiet");
 }
 console.log(`\nALL ${pass} CHECKS PASSED (incl. rest)`);
+// Rotation, sleep, NaN guard, thin air: bodies tumble, roll, stop dead,
+// reject poison, and fly high-altitude air — not sea-level air everywhere.
+{
+  const w = new EngineWorld();
+  const ball = w.spawn({ shape: "sphere", material: "rubber", sizeM: 0.5, pos: { x: -20, y: 0.5, z: 0 }, vel: { x: 10, y: 0, z: 0 } });
+  w.run(0.25);
+  ok(ball.spin.z < -0.5, "rolling matches v/r sign", ball.spin.z.toFixed(2));
+  const w2 = new EngineWorld();
+  const box = w2.spawn({ shape: "box", material: "oak", sizeM: 0.5, pos: { x: 0, y: 6, z: 0 }, vel: { x: 6, y: 0, z: 0 } });
+  w2.run(3);
+  ok(Math.abs(box.rot.x) + Math.abs(box.rot.z) > 0.05, "impacts tumble bodies", `${box.rot.x.toFixed(2)},${box.rot.z.toFixed(2)}`);
+  const w3 = new EngineWorld();
+  const a = w3.spawn({ shape: "box", material: "steel", sizeM: 0.5, pos: { x: 0, y: 6, z: 0 }, vel: { x: 6, y: 0, z: 0 } });
+  w3.run(3);
+  const w4 = new EngineWorld();
+  const b = w4.spawn({ shape: "box", material: "steel", sizeM: 0.5, pos: { x: 0, y: 6, z: 0 }, vel: { x: 6, y: 0, z: 0 } });
+  w4.run(3);
+  ok(a.rot.x === b.rot.x && a.rot.z === b.rot.z && a.pos.x === b.pos.x, "tumble deterministic", `${a.rot.x.toFixed(3)}`);
+  const w5 = new EngineWorld();
+  const s = w5.spawn({ shape: "box", material: "steel", sizeM: 0.5, pos: { x: 0, y: 3, z: 0 }, vel: { x: 2, y: 0, z: 0 } });
+  w5.run(20);
+  ok(s.vel.x === 0 && s.vel.z === 0 && s.spin.x === 0 && s.spin.z === 0, "sleep is exact zero", `${s.vel.x},${s.spin.x}`);
+  const w6 = new EngineWorld();
+  const n = w6.spawn({ shape: "box", material: "oak", sizeM: 0.5, pos: { x: 0, y: 5, z: 0 } });
+  n.vel.y = NaN;
+  w6.run(1);
+  ok(Number.isFinite(n.vel.y) && Number.isFinite(n.pos.y) && w6.log.some((l) => l.includes("non-finite")), "NaN rejected + logged");
+  const w7 = new EngineWorld();
+  const hi = w7.spawn({ shape: "sphere", material: "styrofoam", sizeM: 0.5, pos: { x: 0, y: 8000, z: 0 }, dragProfile: "sphere" });
+  let peak = 0;
+  for (let i = 0; i < 120 * 25; i++) { w7.step(1 / 120); peak = Math.max(peak, Math.abs(hi.vel.y)); }
+  ok(peak > 45, "thin air outruns sea-level physics", peak.toFixed(1));
+  const w8 = new EngineWorld();
+  let threw = false;
+  try { for (let i = 0; i < 600; i++) w8.spawn({ shape: "box", material: "oak", sizeM: 0.1 }); }
+  catch (e) { threw = /budget exceeded/.test((e as Error).message); }
+  ok(threw && w8.bodies.length <= 500, "body budget refuses loudly", String(w8.bodies.length));
+}
+console.log(`\nALL ${pass} CHECKS PASSED (incl. rest-tumble)`);
 // Singular degrees + thermal dataset: every way to say 100°C must mean 100°C,
 // and every melt verdict must quote the energy, not just the threshold.
 {
@@ -413,6 +459,12 @@ console.log(`\nALL ${pass} CHECKS PASSED (incl. wave2)`);
   ok(w.verdict === "REAL" && w.reasons.join().includes("Gold") && w.reasons.join().includes("denser"), "which-denser", w.verdict);
   const t = experience("is titanium stronger than steel");
   ok(t.verdict === "REAL" && (t.measurements.strengthMpaB as number) === 400, "stronger-than", t.verdict);
+  const g = neoParse("a volcano erupting with a huge box on it");
+  ok(g.action === "blast" && g.target.kind === "fluid" && g.target.fluid === "lava", "erupting volcano parses", `${g.action}/${g.target.kind}`);
+  const m2 = neoParse("melting lead in a furnace");
+  ok(m2.action === "melt" && m2.material === "lead", "melting parses", `${m2.action}/${m2.material}`);
+  const f2 = neoParse("freezing water in a steel tank");
+  ok(f2.action === "freeze", "freezing parses", String(f2.action));
 }
 console.log(`\nALL ${pass} CHECKS PASSED (incl. fluency)`);
 // Multi-body crowds + pairwise contact.

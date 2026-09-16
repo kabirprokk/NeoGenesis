@@ -9,7 +9,7 @@ import { getModel, spawnModel, MODEL_COUNT, MODEL_CLASSES } from "./models.js";
 import { experience, runScenario, verdictCSV } from "./experience.js";
 import { neoParse, neoScenario, neoSamples, neoPatternCount, neoToolFor } from "./neo.js";
 import { terminalVelocity, projectileRange, impact, buoyancyVerdict, soundDelay, lightDelay, solarIlluminanceLux, sunColorTempK, kelvinToRGBapprox, slidesOnIncline, reposeOk, heatEnergyJ, heatTimeS, lorentz, relKineticJ, orbitVelocity, escapeVelocity, orbitPeriodS, horizonM, soundSpeed, gravityAt, blackbodyFlux } from "./physics.js";
-import { SPECIFIC_HEAT, UNCERTAINTY, H_CONV, CITATIONS, EMISSIVITY } from "./science.js";
+import { SPECIFIC_HEAT, UNCERTAINTY, H_CONV, CITATIONS, EMISSIVITY, altitudeDensity } from "./science.js";
 import { CODEX_VERSION } from "./constants.js";
 
 export type Args = Record<string, string | number | boolean>;
@@ -53,8 +53,8 @@ export const TOOLS: ToolDef[] = [
   def("stars", "Stellar classes + radiation multipliers.", T([], []), () => STARS),
   def("constants", "Fundamental constants (g, c, G, atm…).", T([], []), () => PHYSICS),
   // ---- models ----
-  def("model-count", "Registry size (12,000).", T([], []), () => ({ count: MODEL_COUNT })),
-  def("model-get", "Deterministic registry entry by index.", T(["index"], [["index", "number", "0–11999"]]),
+  def("model-count", "Registry size (19.2M deterministic).", T([], []), () => ({ count: MODEL_COUNT })),
+  def("model-get", "Deterministic registry entry by index.", T(["index"], [["index", "number", "0–19199999"]]),
     (a) => getModel(num(a, "index"))),
   def("model-search", "First N entries matching material and/or class.", T([], [["material", "string", "optional"], ["class", "string", "optional"], ["limit", "number", "default 10"]]),
     (a) => {
@@ -67,7 +67,7 @@ export const TOOLS: ToolDef[] = [
       }
       return out;
     }),
-  def("model-classes", "The 12 model classes.", T([], []), () => MODEL_CLASSES),
+  def("model-classes", "The 24 model classes.", T([], []), () => MODEL_CLASSES),
   // ---- physics (stateless) ----
   def("terminal-velocity", "Terminal velocity for mass/Cd/area/fluid.", T(["massKg", "cd", "areaM2"], [["massKg", "number", "kg"], ["cd", "number", "drag coefficient"], ["areaM2", "number", "m²"], ["fluid", "string", "air|water|… default air"]]),
     (a) => ({ vtMs: terminalVelocity(num(a, "massKg"), num(a, "cd"), num(a, "areaM2"), FLUIDS[str(a, "fluid", "air")]?.density ?? 1.225) })),
@@ -192,17 +192,20 @@ export const TOOLS: ToolDef[] = [
         }
         check("vacuum range 30m/s@45°", vx0 * tF, touchX, 2);
       }
-      // 2. Terminal velocity: peak fall speed of a draggy body must equal theory.
+      // 2. Terminal velocity: peak fall speed of a draggy body must equal theory
+      // evaluated in the air it actually peaked in (density thins with height —
+      // the sim flies ISA air, so the closed form must too).
       {
         const w = new EngineWorld();
         const b = w.spawn({ shape: "sphere", material: "styrofoam", sizeM: 0.5, pos: { x: 0, y: 2000, z: 0 }, dragProfile: "sphere" });
-        let peak = 0;
+        let peak = 0, peakY = 2000;
         for (let i = 0; i < 120 * 30; i++) {
           w.step(1 / 120);
-          peak = Math.max(peak, Math.abs(b.vel.y));
+          const v = Math.abs(b.vel.y);
+          if (v > peak) { peak = v; peakY = b.pos.y; }
           if (b.pos.y <= b.radiusM + 1e-6) break;
         }
-        check("terminal velocity styrofoam 0.5m", terminalVelocity(b.massKg, b.dragCd, b.areaM2, w.env.airDensity), peak, 5);
+        check("terminal velocity styrofoam 0.5m", terminalVelocity(b.massKg, b.dragCd, b.areaM2, altitudeDensity(peakY)), peak, 5);
       }
       // 3. Free fall position in vacuum at t=1 s: y = 20 − g/2.
       {

@@ -1,6 +1,39 @@
 // Cinematic first-person controller: walk/run/crouch/swim/climb stubs, subtle weight, no shake spam.
 import * as THREE from "three";
 
+/** Minimal body surface the collider needs — the engine Body satisfies this. */
+export interface PushableBody { vel: { x: number; y: number; z: number }; hasMoved: boolean; settled: boolean }
+export interface PlayerBodyLike {
+  pos: { x: number; y: number; z: number }; shape: string; radiusM: number;
+  halfM?: { x: number; y: number; z: number }; massKg: number;
+  isStatic: boolean; ghost: boolean; vel: { x: number; y: number; z: number };
+  hasMoved: boolean; settled: boolean;
+}
+export interface Collider {
+  x: number; z: number; r: number; top: number;
+  massKg: number; pushable: boolean; ref: PushableBody;
+}
+/** The player's shove weight: 80 kg body + momentum, capped like a sprinting shove. */
+export const PLAYER_MASS_KG = 80;
+
+/** Build the collider set from live bodies: ghost cores are invisible (never
+ *  walls), distant bodies are culled, statics block but never move. */
+export function buildColliders(bodies: PlayerBodyLike[], px: number, pz: number): Collider[] {
+  const out: Collider[] = [];
+  for (const b of bodies) {
+    if (b.ghost) continue;
+    const dx = b.pos.x - px, dz = b.pos.z - pz;
+    if (dx * dx + dz * dz > 1600) continue; // beyond 40 m, ignore
+    out.push({
+      x: b.pos.x, z: b.pos.z,
+      r: b.shape === "sphere" ? b.radiusM : Math.max(b.halfM?.x ?? b.radiusM, b.halfM?.z ?? b.radiusM),
+      top: b.pos.y + (b.shape === "sphere" ? b.radiusM : (b.halfM?.y ?? b.radiusM)),
+      massKg: b.massKg, pushable: !b.isStatic, ref: b,
+    });
+  }
+  return out;
+}
+
 /** True while the user is writing in a text field — game keys must stand down. */
 export function uiHasFocus(e?: Event): boolean {
   const t = (e?.target ?? document.activeElement) as HTMLElement | null;
@@ -23,6 +56,8 @@ export class PlayerController {
   gravity = 12.5;   // set 9.80665 for real Earth (engine-owned games do this)
   maxFall = 54;     // human terminal velocity, m/s
   keys: MoveState = { f: false, b: false, l: false, r: false, run: false, crouch: false, jump: false };
+  private jumpBuf = 0; // tap insurance: a Space tap shorter than one frame
+  // still jumps (polled keys.jump alone misses sub-frame taps, real bug).
   /** Hard stop: release every key and kill drift velocity. */
   stop(): void {
     this.keys = { f: false, b: false, l: false, r: false, run: false, crouch: false, jump: false };
@@ -95,10 +130,10 @@ export class PlayerController {
     if (code === "KeyD" || code === "ArrowRight") this.keys.r = on;
     if (code === "ShiftLeft" || code === "ShiftRight") this.keys.run = on;
     if (code === "KeyC") this.keys.crouch = on;
-    if (code === "Space") this.keys.jump = on;
+    if (code === "Space") { this.keys.jump = on; if (on) this.jumpBuf = 0.15; }
   }
   update(dt: number, groundY: number, inWater: boolean,
-    opts?: { colliders?: { x: number; z: number; r: number }[]; grade?: number }) {
+    opts?: { colliders?: Collider[]; grade?: number }) {
     let speed = this.keys.crouch ? 1.6 : this.keys.run ? 7.5 : 4.2;
     // Uphill costs effort, downhill is free — movement has physical weight.
     const grade = opts?.grade ?? 0;
@@ -117,23 +152,64 @@ export class PlayerController {
       if (Math.hypot(this.vel.x, this.vel.z) < 0.05) { this.vel.x = 0; this.vel.z = 0; }
     }
     if (inWater) { this.vel.x *= 0.55; this.vel.z *= 0.55; }
-    if (this.keys.jump && this.grounded) { this.vel.y = 4.6; this.grounded = false; }
+    this.jumpBuf = Math.max(0, this.jumpBuf - dt);
+    if ((this.keys.jump || this.jumpBuf > 0) && this.grounded) {
+      this.vel.y = 4.6; this.grounded = false; this.jumpBuf = 0;
+    }
     this.vel.y -= this.gravity * dt;
     if (this.vel.y < -this.maxFall) this.vel.y = -this.maxFall;
     this.obj.position.addScaledVector(this.vel, dt);
-    // Solid world: trees, boulders, and animals push back (two relaxation passes).
+    // Perfect collider: feet above an object's top pass clean over (jump over
+    // AND onto); sides never pass through; weight decides pushes — an 80 kg
+    // human shoves crates aside but bounces off lead blocks and tank walls.
     const cols = opts?.colliders;
+    const feetY = this.obj.position.y;
+    const pr = 0.45;
+    let support = groundY;
     if (cols) {
-      const pr = 0.45;
+      for (const c of cols) {
+        const dx0 = this.obj.position.x - c.x, dz0 = this.obj.position.z - c.z;
+        if (dx0 * dx0 + dz0 * dz0 < (c.r + pr) * (c.r + pr) && feetY >= c.top - 0.35) {
+          if (c.top > support) support = c.top; // stand on it
+        }
+      }
+    }
+    if (cols) {
+      const pushMass = PLAYER_MASS_KG + Math.hypot(this.vel.x, this.vel.z) * 5;
       for (let pass = 0; pass < 2; pass++) {
         for (const c of cols) {
+          if (feetY > c.top - 0.08) continue; // airborne above it — no touch
           const dx = this.obj.position.x - c.x, dz = this.obj.position.z - c.z;
           const min = c.r + pr;
           const d2 = dx * dx + dz * dz;
           if (d2 < min * min && d2 > 1e-8) {
             const d = Math.sqrt(d2), push = (min - d) / d;
-            this.obj.position.x += dx * push;
-            this.obj.position.z += dz * push;
+            const nx = dx / d, nz = dz / d;
+            if (c.pushable && pushMass >= c.massKg) {
+              // Shove: overlap converts to body velocity (capped, no cannoning),
+              // the body wakes, the player pays effort. Weight wins, honestly.
+              const strength = Math.min(1.5, Math.max(0.4, pushMass / Math.max(1, c.massKg)));
+              const bSpeed = Math.hypot(c.ref.vel.x, c.ref.vel.z);
+              if (bSpeed < 6) {
+                const gift = Math.min((min - d) * 8, 2.5) * strength;
+                c.ref.vel.x += nx * gift;
+                c.ref.vel.z += nz * gift;
+                c.ref.hasMoved = true;
+                c.ref.settled = false;
+              }
+              this.obj.position.x += dx * push * 0.15;
+              this.obj.position.z += dz * push * 0.15;
+              this.vel.x *= 0.85; this.vel.z *= 0.85;
+            } else {
+              // Blocked: push out; inward velocity dies — except a held jump
+              // against a LOW obstacle keeps half its run-up, so a running
+              // jump carries over instead of dying at the edge.
+              this.obj.position.x += dx * push;
+              this.obj.position.z += dz * push;
+              const soft = this.keys.jump && c.top < 1.0 ? 0.5 : 1.0;
+              const vn = this.vel.x * nx + this.vel.z * nz;
+              if (vn < 0) { this.vel.x -= nx * vn * soft; this.vel.z -= nz * vn * soft; }
+            }
           } else if (d2 <= 1e-8) {
             this.obj.position.x += min; // dead-center: eject along +x
           }
@@ -150,8 +226,11 @@ export class PlayerController {
     if (Math.abs(this.shakeX) < 1e-4) this.shakeX = 0;
     if (Math.abs(this.shakeY) < 1e-4) this.shakeY = 0;
     this.pitch.position.set(this.shakeX, this.eyeCur + this.shakeY, 0);
-    if (this.obj.position.y <= groundY) {
-      this.obj.position.y = groundY; this.vel.y = 0; this.grounded = true;
+    const landY = Math.max(groundY, support);
+    if (this.obj.position.y <= landY) {
+      this.obj.position.y = landY; this.vel.y = 0; this.grounded = true;
+    } else if (this.obj.position.y > landY + 0.02) {
+      this.grounded = false; // walked off an edge — airborne, gravity owns us
     }
     // Eyes never clip underground on steep ground.
     const minEye = groundY + 0.4;

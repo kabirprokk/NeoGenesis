@@ -13,7 +13,9 @@ function cloudTexture(): THREE.CanvasTexture {
   const g = c.getContext("2d")!;
   g.clearRect(0, 0, 256, 128);
   for (let i = 0; i < 26; i++) {
-    const x = 30 + Math.random() * 196, y = 45 + Math.random() * 40, r = 18 + Math.random() * 30;
+    const r = 18 + Math.random() * 30;
+    const x = 50 + r + Math.random() * Math.max(1, 156 - r * 2);
+    const y = 40 + r * 0.5 + Math.random() * Math.max(1, 48 - r);
     const grad = g.createRadialGradient(x, y, 0, x, y, r);
     grad.addColorStop(0, "rgba(255,255,255,0.55)");
     grad.addColorStop(1, "rgba(255,255,255,0)");

@@ -66,8 +66,8 @@ The player collides with every staged body and tank wall (water slows you);
 molten bodies visibly slump into spreading puddles, burning bodies char black.
 
 ## The 10,000+ models
-`engine/src/models.ts` holds a deterministic 12,000-entry registry (12 classes ×
-10 materials × 10 sizes × 10 configs): `getModel(i)` / `spawnModel(world, i)` —
+`engine/src/models.ts` holds a deterministic 19,200,000-entry registry (24 classes ×
+20 materials × 16 sizes × 10 configs × 10 fills × 25 cosmetic liveries): `getModel(i)` / `spawnModel(world, i)` —
 identical physics every time, no storage. The old 105-variant matrix
 (`neo_genesis_model_matrix.json`) is its ancestor, kept untouched.
 

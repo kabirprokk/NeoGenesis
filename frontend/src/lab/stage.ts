@@ -73,13 +73,14 @@ export function stageNeo(world: EngineWorld, plan: NeoPlan, ax: number, az: numb
   };
 
   // Fluid pool from the MAIN plan (the crowd shares one tank). Throws get a
-  // wide catch tank; pours get a container-scale tank.
+  // wide catch tank; pours get a container-scale tank. Blast skips this: its
+  // own branch opens an eruption vent instead (one pool, never two).
   const mainTrueH = plan.heightM ?? 10;
   const mainH = Math.min(mainTrueH, 120);
   const mainTrueV = plan.velMs ?? 6;
   const mainStageV = Math.min(mainTrueV, 400);
   let surfaceY = 0;
-  if (plan.target.kind === "fluid" && plan.target.fluid) {
+  if (plan.target.kind === "fluid" && plan.target.fluid && plan.action !== "blast") {
     const v0 = plan.action === "throw" ? mainStageV : 0;
     const ang = plan.angleDeg ?? 25;
     const vy0 = v0 * Math.sin((ang * Math.PI) / 180);
@@ -128,7 +129,8 @@ export function stageNeo(world: EngineWorld, plan: NeoPlan, ax: number, az: numb
         const backoff = Math.min(60, (offV * Math.cos((ang * Math.PI) / 180)) * tF);
         const b = spawnBody({ shape: p.shape, material: p.material, sizeM: psize,
           pos: { x: X - backoff, y: surfaceY + pH, z: az }, vel: { x: vx0, y: vy0, z: 0 },
-          dragProfile: p.shape === "sphere" ? "sphere" : "cube" });
+          dragProfile: p.shape === "sphere" ? "sphere" : "cube",
+          spin: p.spin ? { x: p.spin[0], y: p.spin[1], z: p.spin[2] } : undefined });
         const vStr = v0 >= 1000000 ? `${(v0 / 1000000).toFixed(1)}M m/s` : v0 >= 10000 ? `${(v0 / 1000).toFixed(1)}k m/s` : `${+v0.toFixed(1)} m/s`;
         lines.push(`${tag}${pmat.name} ${p.shape} (${b.massKg.toFixed(0)} kg) thrown ${vStr} @ ${ang}° from ${ptrueH} m`);
         if (ptrueV > 400) lines.push("streaking too fast to track — watch the verdict trace for the real numbers");
@@ -192,6 +194,38 @@ export function stageNeo(world: EngineWorld, plan: NeoPlan, ax: number, az: numb
         break;
       }
       case "blast": {
+        // Eruption staging: a fluid target (lava above all) opens a real pool
+        // and the vent fountain goes live — bombs arc out on ballistic paths
+        // while the main body rides perched above ("a huge box kept on it").
+        // Deterministic layout (no RNG): same prompt, same volcano, every run.
+        if (p.target.kind === "fluid" && p.target.fluid && FLUIDS[p.target.fluid]) {
+          const f = FLUIDS[p.target.fluid];
+          const hot = (f.tempC ?? 0) >= 500;
+          const half = Math.max(3, psize + 2);
+          stagedFluidStart = world.fluids.length;
+          world.addFluid({
+            name: f.name, min: { x: ax - half, y: 0, z: az - half },
+            max: { x: ax + half, y: 1.7, z: az + half },
+            density: f.density ?? 1000, viscosity: f.viscosity, tempC: f.tempC,
+          });
+          stagedFluidCount = 1;
+          lines.push(`${tag}${f.name} vent opened at ${ax.toFixed(0)}, ${az.toFixed(0)} — pool is real fluid, eruption is live`);
+          const bombs = 8;
+          for (let i = 0; i < bombs; i++) {
+            spawnBody({ shape: "sphere", material: hot ? "granite" : "concrete",
+              sizeM: 0.25 + ((i * 37) % 10) / 10 * 0.45,
+              pos: { x: X + ((i * 53) % 7) - 3, y: 3 + (i % 4) * 2, z: az + ((i * 29) % 7) - 3 },
+              vel: { x: ((i * 41) % 9) - 4, y: 12 + (i % 5) * 3, z: ((i * 17) % 9) - 4 },
+              tempC: hot ? 900 : undefined, dragProfile: "sphere",
+              spin: { x: (i % 2 ? 1 : -1) * 0.9, y: 0, z: ((i + 1) % 2 ? 1 : -1) * 0.9 } });
+          }
+          lines.push(`${tag}${bombs}× bombs erupting — gravity decides where each lands, impacts shatter honestly`);
+          const b = spawnBody({ shape: p.shape, material: p.material, sizeM: psize,
+            pos: { x: X, y: 6 + psize, z: az } });
+          lines.push(`${tag}${pmat.name} ${p.shape} (${b.massKg.toFixed(0)} kg) perched above the vent — rides the fountain, cooks, drops in`);
+          if (hot) lines.push(`${f.name} runs ~${f.tempC}°C — contact MELTS/BURNS on the live log, not just splashes`);
+          break;
+        }
         const b = spawnBody({ shape: p.shape, material: p.material, sizeM: psize,
           pos: { x: X, y: 30, z: az }, vel: { x: 0, y: -25, z: 0 } });
         lines.push(`${tag}${pmat.name} ${p.shape} (${b.massKg.toFixed(0)} kg) slammed down at 25 m/s — blast impact, live`);
@@ -280,7 +314,8 @@ export function stageNeo(world: EngineWorld, plan: NeoPlan, ax: number, az: numb
       }
       default: { // drop / float / sink
         const b = spawnBody({ shape: p.shape, material: p.material, sizeM: psize,
-          pos: { x: X, y: surfaceY + pH, z: az } });
+          pos: { x: X, y: surfaceY + pH, z: az },
+          spin: p.spin ? { x: p.spin[0], y: p.spin[1], z: p.spin[2] } : undefined });
         lines.push(`${tag}${pmat.name} ${p.shape} (${b.massKg.toFixed(0)} kg) released from ${ptrueH} m`);
         if (p.spin && (p.spin[0] || p.spin[1] || p.spin[2])) {
           lines.push(`${tag}spinning [${p.spin.join(", ")}] rad/s — Magnus curve live (bodies lift, they don't tumble)`);

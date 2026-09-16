@@ -2,8 +2,8 @@
 // fixed 120 Hz timestep, deterministic. Bodies are rigid spheres/boxes with real
 // material properties. This is what the AI "inhabits" during an experience.
 import { PHYSICS } from "./constants.js";
-import { MATERIALS, FLUIDS, DRAG_CD, type MaterialDef } from "./materials.js";
-import { SPECIFIC_HEAT, EMISSIVITY, H_CONV } from "./science.js";
+import { MATERIALS, DRAG_CD, type MaterialDef } from "./materials.js";
+import { SPECIFIC_HEAT, EMISSIVITY, H_CONV, altitudeDensity } from "./science.js";
 import { machCdFactor, magnusCl } from "./physics.js";
 
 export interface Vec3 { x: number; y: number; z: number }
@@ -24,7 +24,8 @@ export interface Body {
   hasMoved: boolean; settled: boolean; // rest-event bookkeeping (one "came to rest" per body)
   hitT: number; // last body-on-body impact time (narration cooldown)
   ghost: boolean; // nested cargo (fluid cores): skips body-vs-body contact, still hits ground
-  spin: Vec3; // angular velocity rad/s — Magnus lift only (no tumbling orientation yet)
+  spin: Vec3; // angular velocity rad/s — Magnus lift + visual tumble + rolling
+  rot: Vec3; // euler orientation, integrated from spin every substep
   sloshM: number; // cargo offset from its shell anchor (0 for shells) — weight-shift readout
   landedT: number | null; // first touchdown time (ground or fluid surface) for landing-order races
   dragProfile: string; dragCd: number; areaM2: number;
@@ -36,6 +37,9 @@ export interface EnvPreset {
 }
 /** Ground bounce partner: poured-concrete-ish slab, gameplay-tuned (pair property). */
 export const GROUND_E = 0.15;
+/** Body budget: collidePairs is O(n²) and shadows cost per mesh — past this
+ * the game would slide-show. Spawn refuses loudly instead of lagging silently. */
+export const MAX_BODIES = 500;
 /** Slosh tether: ghost fluid core ↔ shell. Approx pendulum model, NOT CFD —
  * stiffness/damping widen with empty headspace (half-full sloshes hardest). */
 export interface SloshTether { cargo: string; shell: string; k: number; damp: number; fill: number }
@@ -72,6 +76,9 @@ export class EngineWorld {
     ghost?: boolean; spin?: Vec3; cargoOfId?: string; fillFrac?: number;
     scale?: Vec3; // non-uniform stretch (tank walls, beams) — volume/area scale along
   }): Body {
+    if (this.bodies.length >= MAX_BODIES) {
+      throw new Error(`body budget exceeded (${MAX_BODIES}) — remove something first (reset clears all)`);
+    }
     const mat = MATERIALS[opts.material ?? "oak"];
     const shape = opts.shape ?? "box";
     const sizeM = opts.sizeM ?? 1;
@@ -88,7 +95,7 @@ export class EngineWorld {
       broken: false, molten: false, burning: false,
       fluid: null, isStatic: opts.static ?? false,
       hasMoved: false, settled: false, hitT: -10, ghost: opts.ghost ?? false,
-      spin: opts.spin ?? { x: 0, y: 0, z: 0 }, sloshM: 0, landedT: null,
+      spin: opts.spin ?? { x: 0, y: 0, z: 0 }, rot: { x: 0, y: 0, z: 0 }, sloshM: 0, landedT: null,
       dragProfile, dragCd: DRAG_CD[dragProfile] ?? DRAG_CD.cube, areaM2: area,
       events: [],
     };
@@ -145,12 +152,29 @@ export class EngineWorld {
 
   /** One physics integration pass (no pair contact, no clock — step() drives). */
   private integrate(dt: number, out: string[]): void {
-    const air = FLUIDS.air;
     for (const b of this.bodies) {
       if (b.isStatic) continue; // tank walls, props — rendered, never integrated
       if (b.broken && b.molten) continue;
+      // NaN guard: poisoned state (bad spawn args, runaway math) can never
+      // propagate — freeze the body, say so once, keep simulating.
+      if (!Number.isFinite(b.pos.x + b.pos.y + b.pos.z + b.vel.x + b.vel.y + b.vel.z)) {
+        b.vel.x = 0; b.vel.y = 0; b.vel.z = 0;
+        b.pos.y = Math.max(b.pos.y === b.pos.y ? b.pos.y : 10, b.shape === "sphere" ? b.radiusM : b.halfM!.y);
+        b.pos.x = b.pos.x === b.pos.x ? b.pos.x : 0;
+        b.pos.z = b.pos.z === b.pos.z ? b.pos.z : 0;
+        const ev = `${b.id} state reset — non-finite input rejected.`;
+        b.events.push(ev); out.push(ev); this.log.push(ev);
+        continue;
+      }
+      // Altitude-coupled air and gravity (real formulas, zero tuning):
+      // g(h) = g0·(R/(R+h))² and ISA/US-76 density. Sea level reproduces the
+      // old constants exactly; high drops fly thinner, faster air. Presets
+      // (vacuum, Mars) scale relatively — a zero stays zero.
+      const altM = Math.max(0, b.pos.y);
+      const g = this.env.gravity * (6371000 / (6371000 + altM)) ** 2;
+      const rho = this.env.airDensity < 1e-9 ? 0 : this.env.airDensity * (altitudeDensity(altM) / 1.225);
       // Gravity.
-      b.vel.y -= this.env.gravity * dt;
+      b.vel.y -= g * dt;
       // Quadratic air drag on AIR-RELATIVE velocity (wind counts). Cd rises
       // through the transonic bump (approx). No terminal-velocity clamp:
       // vt is the equilibrium fall speed, not a speed limit — supersonic
@@ -161,7 +185,7 @@ export class EngineWorld {
       if (sp > 1.5) b.hasMoved = true;
       if (rsp > 1e-6) {
         const cdEff = b.dragCd * machCdFactor(rsp, this.env.ambientC);
-        const dragF = 0.5 * this.env.airDensity * rsp * rsp * cdEff * b.areaM2;
+        const dragF = 0.5 * rho * rsp * rsp * cdEff * b.areaM2;
         const dv = (dragF / b.massKg) * dt;
         const k = Math.max(0, 1 - dv / rsp);
         b.vel.x = this.env.wind.x + rvx * k;
@@ -178,14 +202,20 @@ export class EngineWorld {
           const cz = b.spin.x * rvy - b.spin.y * rvx;
           const cm = Math.hypot(cx, cy, cz);
           if (cm > 1e-9) {
-            const f = 0.5 * this.env.airDensity * rsp * rsp * b.areaM2 * cl / cm;
+            const f = 0.5 * rho * rsp * rsp * b.areaM2 * cl / cm;
             b.vel.x += (f * cx / b.massKg) * dt;
             b.vel.y += (f * cy / b.massKg) * dt;
             b.vel.z += (f * cz / b.massKg) * dt;
           }
         }
       }
-      void air;
+      // Orientation integrates every substep — spin IS angular velocity.
+      // Airborne spin persists with weak angular drag (approx, no inertia
+      // tensor); ground contact rolls and impacts tumble (below). Collision
+      // stays AABB: the tumble is visual kinematics, documented.
+      const angDrag = Math.exp(-0.08 * dt);
+      b.spin.x *= angDrag; b.spin.y *= angDrag; b.spin.z *= angDrag;
+      b.rot.x += b.spin.x * dt; b.rot.y += b.spin.y * dt; b.rot.z += b.spin.z * dt;
       // Fluids: submersion fraction → buoyancy counter-force + viscous damping.
       // Floating equilibrium falls out of the integration; nothing is scripted.
       const r0 = b.shape === "sphere" ? b.radiusM : b.halfM!.y;
@@ -206,7 +236,7 @@ export class EngineWorld {
         }
         b.fluid = fl.name;
         subTemp = fl.tempC ?? this.env.ambientC;
-        b.vel.y += this.env.gravity * (fl.density / b.material.density) * sub * dt;
+        b.vel.y += g * (fl.density / b.material.density) * sub * dt;
         const k = Math.exp(-sub * (1.5 + Math.min(8, fl.viscosity * 6)) * dt);
         b.vel.x *= k; b.vel.y *= k; b.vel.z *= k;
       } else {
@@ -227,6 +257,10 @@ export class EngineWorld {
           // Horizontal friction bleed.
           const fr = Math.max(0, 1 - this.env.groundMuK * dt * 60 * 0.16);
           b.vel.x *= fr; b.vel.z *= fr;
+          // Impact tumble: horizontal motion converts to spin, deterministically
+          // and proportionally — real impacts trade translation for rotation.
+          b.spin.x += (b.vel.z * 0.2) / r;
+          b.spin.z += (-b.vel.x * 0.2) / r;
           // Structural verdict on hard hits. Brittle materials fail from point
           // loading (stress concentration over ~0.7% of face); ductile ones
           // spread the load over ~10%. Conservative for small glass — documented.
@@ -251,6 +285,15 @@ export class EngineWorld {
           // Resting contact friction kills slide.
           const fr = Math.max(0, 1 - this.env.groundMuS * dt * 8);
           b.vel.x *= fr; b.vel.z *= fr;
+          // Rolling without slipping: relax spin toward ω = n̂ × v / r.
+          const kRoll = Math.min(1, 8 * dt);
+          b.spin.x += ((b.vel.z / r) - b.spin.x) * kRoll;
+          b.spin.z += ((-b.vel.x / r) - b.spin.z) * kRoll;
+          // Sleep: true rest is exact zero — kills slide/spin jitter nonsense.
+          if (Math.hypot(b.vel.x, b.vel.z) < 0.15) {
+            b.vel.x = 0; b.vel.z = 0;
+            b.spin.x = 0; b.spin.y = 0; b.spin.z = 0;
+          }
           // One rest note per body, so slides/rolls/crushes narrate their ending.
           if (b.hasMoved && !b.settled && Math.hypot(b.vel.x, b.vel.z) < 0.4) {
             b.settled = true;

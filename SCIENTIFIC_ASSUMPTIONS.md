@@ -30,17 +30,21 @@
   temperature that can genuinely melt ice. Not a GCM.
 
 ## 3. What the engine simulates (and how honestly)
-- Rigid bodies at 120 Hz: gravity, quadratic drag (wind-relative, transonic
+- Rigid bodies at 120 Hz: gravity (altitude-coupled: g(h) = g₀·(R/(R+h))²),
+  quadratic drag in altitude-coupled ISA/US-76 air (wind-relative, transonic
   Cd bump approx), buoyancy + viscosity in fluid volumes, Magnus lift for
-  spinning bodies (approx, no tumbling), bounce/friction (pair-averaged
+  spinning bodies (approx), visual tumble integrated from spin with rolling
+  without slipping on ground contact and impact tumble kicks (collision stays
+  AABB — orientation is kinematic, documented), bounce/friction (pair-averaged
   restitution with a tuned ground partner), body-vs-body contact (impulse,
   pair restitution, fracture), CCD-lite substeps against tunneling,
   shatter vs ultimate strength, melt vs melt point, ignition vs ignition
   point. All from codex tables except labeled tuned/approx items.
 - Slosh in carried vessels is a spring-damper tether (approx pendulum, not
   CFD): fill fraction sets cargo mass and tether looseness. Wind is a bulk
-  air vector in every drag term. Bodies still do not tumble and fast bodies
-  past ~3 km/s / 32 substeps can still tunnel — disclosed in `docs/WORLD.md`.
+  air vector in every drag term. Bodies tumble visually and roll on contact
+  but collision volumes stay axis-aligned, and fast bodies past ~3 km/s /
+  32 substeps can still tunnel — disclosed in `docs/WORLD.md`.
 - No freeze kinetics, no corrosion kinetics: cold is staged, corrosion is a
   table timeline. Both labeled at staging time, never faked.
 - Heat transfer is real but lumped: convection in the surrounding medium
@@ -64,7 +68,9 @@
 3. Acoustic damping at exactly 1 kHz — nearby frequencies differ.
 4. Human-record thresholds (deadlift, sprint) move as records move.
 5. Heating times carry ±50% (convection coefficient dominates) — quoted on every verdict.
-6. High-altitude ballistics fly constant-g with a quoted gravity-at-release caveat.
+6. High-altitude ballistics fly altitude-coupled gravity and ISA air — the
+   `validate` tool certifies the sim against theory evaluated at peak
+   altitude, not sea level.
 7. Sound uses dry-air c(T); thin CO₂ atmospheres (Mars) are flagged MIXED, not faked.
 8. The `validate` tool re-certifies integration error on demand (currently ≤0.3%).
 

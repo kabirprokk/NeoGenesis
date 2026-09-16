@@ -3,12 +3,10 @@ html, body, #root { margin: 0; height: 100%; background: #000; overflow: hidden;
   font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif; }
 canvas.webgl { display: block; width: 100%; height: 100%; }
 .hud { position: fixed; inset: 0; pointer-events: none; color: #e8e4d8; }
-.hud-top { position: absolute; top: 14px; left: 0; right: 0; display: flex;
+.hud-top { position: absolute; top: 64px; left: 0; right: 0; display: flex;
   justify-content: center; gap: 18px; font-size: 12px; letter-spacing: 0.12em;
   text-transform: uppercase; opacity: 0.85; transition: opacity 1s; }
-.hud-top.faded, .hud-bottom.faded { opacity: 0; }
-.hud-bottom { position: absolute; bottom: 16px; left: 18px; font-size: 12px; line-height: 1.7;
-  background: rgba(0,0,0,0.35); padding: 10px 12px; border-radius: 8px; transition: opacity 1s; }
+.hud-top.faded { opacity: 0; }
 .hud-help { position: absolute; bottom: 16px; right: 18px; font-size: 11px; opacity: 0.6; text-align: right; }
 .hud-title { position: absolute; top: 40%; width: 100%; text-align: center; pointer-events: none; }
 .hud-title h1 { font-size: 42px; letter-spacing: 0.35em; margin: 0; font-weight: 200; }
@@ -20,7 +18,6 @@ canvas.webgl { display: block; width: 100%; height: 100%; }
   border-radius: 6px; padding: 8px; margin: 6px 0; }
 .panel button { background: #1d2b1d; color: #dfe8d5; border: 1px solid #3a4a3a; border-radius: 6px;
   padding: 7px 12px; cursor: pointer; margin-right: 8px; }
-.vitals span.low { color: #ff9a7a; }
 /* ---- NeoGenesis motion layer: panels slide, badges pop, buttons breathe ---- */
 @keyframes neo-slide-in { from { opacity: 0; transform: translate(-50%, -14px) scale(0.98); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
 @keyframes neo-pop { 0% { transform: scale(0.6); } 55% { transform: scale(1.12); } 100% { transform: scale(1); } }
