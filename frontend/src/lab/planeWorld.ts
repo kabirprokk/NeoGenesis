@@ -36,9 +36,15 @@ function gridTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 512; c.height = 512;
   const g = c.getContext("2d")!;
+  // Base earth tone with subtle gradient
   g.fillStyle = "#6f744e"; g.fillRect(0, 0, 512, 512);
-  const macro = ["#66703f", "#7f8f57", "#8a7355"];
-  // Wrapped drawing (3×3 offsets): blotches crossing an edge continue on the
+  // Subtle radial vignette for depth
+  const vignette = g.createRadialGradient(256, 256, 100, 256, 256, 360);
+  vignette.addColorStop(0, "rgba(0,0,0,0)");
+  vignette.addColorStop(1, "rgba(0,0,0,0.12)");
+  g.fillStyle = vignette; g.fillRect(0, 0, 512, 512);
+  const macro = ["#66703f", "#7f8f57", "#8a7355", "#5e6840", "#7a8550"];
+  // Wrapped drawing (3x3 offsets): blotches crossing an edge continue on the
   // opposite side, so the repeat shows no seams (caught live in-game).
   const blot = (x: number, y: number, r: number, col: string, alpha: string): void => {
     for (let ox = -1; ox <= 1; ox++) {
@@ -51,23 +57,37 @@ function gridTexture(): THREE.CanvasTexture {
       }
     }
   };
-  for (let i = 0; i < 40; i++) {
+  // Large macro patches — broad terrain variation
+  for (let i = 0; i < 50; i++) {
     const macroTones = macro[Math.floor(Math.random() * macro.length)];
-    blot(Math.random() * 512, Math.random() * 512, 90 + Math.random() * 130, macroTones, "66");
+    blot(Math.random() * 512, Math.random() * 512, 80 + Math.random() * 140, macroTones, "55");
   }
-  // Sparse dirt: dry-earth patches break the green wash.
-  for (let i = 0; i < 24; i++) {
-    blot(Math.random() * 512, Math.random() * 512, 60 + Math.random() * 80, "#6b5b3e", "44");
+  // Sparse dirt: dry-earth patches break the green wash
+  for (let i = 0; i < 30; i++) {
+    blot(Math.random() * 512, Math.random() * 512, 50 + Math.random() * 90, "#6b5b3e", "38");
   }
-  const tones = ["#66703f", "#7f8f57", "#9a9a6e", "#8a7355", "#758052", "#a8a06b"];
-  for (let i = 0; i < 300; i++) {
+  // Mid-range detail blotches
+  const tones = ["#66703f", "#7f8f57", "#9a9a6e", "#8a7355", "#758052", "#a8a06b", "#5c6640"];
+  for (let i = 0; i < 400; i++) {
     const col = tones[Math.floor(Math.random() * tones.length)];
-    blot(Math.random() * 512, Math.random() * 512, 10 + Math.random() * 60, col, "99");
+    blot(Math.random() * 512, Math.random() * 512, 8 + Math.random() * 50, col, "88");
   }
-  for (let i = 0; i < 2500; i++) {
-    const v = 105 + Math.floor(Math.random() * 40);
-    g.fillStyle = `rgba(${v},${v + 8},${v - 14},0.22)`;
-    g.fillRect(Math.random() * 512, Math.random() * 512, 2, 2);
+  // Fine grain speckle — subtle noise
+  for (let i = 0; i < 3000; i++) {
+    const v = 100 + Math.floor(Math.random() * 50);
+    const a = 0.15 + Math.random() * 0.15;
+    g.fillStyle = `rgba(${v},${v + 10},${v - 12},${a})`;
+    g.fillRect(Math.random() * 512, Math.random() * 512, 1 + Math.random(), 1 + Math.random());
+  }
+  // Occasional tiny pebbles
+  for (let i = 0; i < 60; i++) {
+    const px = Math.random() * 512, py = Math.random() * 512;
+    const pr = 2 + Math.random() * 4;
+    const pv = 80 + Math.floor(Math.random() * 40);
+    g.fillStyle = `rgba(${pv},${pv + 5},${pv - 8},0.4)`;
+    g.beginPath(); g.arc(px, py, pr, 0, Math.PI * 2); g.fill();
+    g.fillStyle = `rgba(${pv + 20},${pv + 25},${pv + 12},0.2)`;
+    g.beginPath(); g.arc(px - 0.5, py - 0.5, pr * 0.7, 0, Math.PI * 2); g.fill();
   }
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
@@ -81,19 +101,32 @@ function shimmerTexture(): THREE.CanvasTexture {
   const c = document.createElement("canvas");
   c.width = 256; c.height = 256;
   const g = c.getContext("2d")!;
-  g.fillStyle = "#d8d8d8"; g.fillRect(0, 0, 256, 256);
-  for (let i = 0; i < 240; i++) {
-    const x = Math.random() * 256, y = Math.random() * 256, r = 4 + Math.random() * 16;
-    const v = 190 + Math.floor(Math.random() * 65);
+  // Soft blue-grey base
+  g.fillStyle = "#c8d4e0"; g.fillRect(0, 0, 256, 256);
+  // Caustic-like light patterns
+  for (let i = 0; i < 350; i++) {
+    const x = Math.random() * 256, y = Math.random() * 256, r = 3 + Math.random() * 18;
+    const v = 180 + Math.floor(Math.random() * 75);
     const grad = g.createRadialGradient(x, y, 0, x, y, r);
-    grad.addColorStop(0, `rgba(${v},${v},${v},0.5)`);
-    grad.addColorStop(1, `rgba(${v},${v},${v},0)`);
+    grad.addColorStop(0, `rgba(${v},${v + 8},${v + 16},0.45)`);
+    grad.addColorStop(0.5, `rgba(${v},${v + 4},${v + 10},0.15)`);
+    grad.addColorStop(1, `rgba(${v},${v + 4},${v + 10},0)`);
+    g.fillStyle = grad;
+    g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  }
+  // Bright caustic highlights
+  for (let i = 0; i < 80; i++) {
+    const x = Math.random() * 256, y = Math.random() * 256;
+    const r = 2 + Math.random() * 6;
+    const grad = g.createRadialGradient(x, y, 0, x, y, r);
+    grad.addColorStop(0, "rgba(255,255,255,0.35)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
     g.fillStyle = grad;
     g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
   }
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(2, 2);
+  t.repeat.set(3, 3);
   return t;
 }
 
@@ -428,44 +461,173 @@ export class PlaneWorld {
     if (!kind) return;
     if (kind === "heat" || kind === "frost") {
       const hot = kind === "heat";
-      const chamber = new THREE.Mesh(new THREE.BoxGeometry(size * 2 + 1.6, size * 2 + 1.6, size * 2 + 1.6),
+      const chamberSize = size * 2 + 1.6;
+      // Outer glass chamber
+      const chamber = new THREE.Mesh(new THREE.BoxGeometry(chamberSize, chamberSize, chamberSize),
         new THREE.MeshStandardMaterial({
-          color: hot ? 0xff5a00 : 0x4aa8ff, transparent: true, opacity: 0.16,
-          roughness: 0.2, emissive: hot ? 0xff4400 : 0x2266ff, emissiveIntensity: 0.7,
+          color: hot ? 0xff5a00 : 0x4aa8ff, transparent: true, opacity: 0.12,
+          roughness: 0.05, emissive: hot ? 0xff4400 : 0x2266ff, emissiveIntensity: 0.6,
           side: THREE.DoubleSide, depthWrite: false,
         }));
       chamber.position.set(x, size + 0.4, z);
       this.rig.add(chamber);
+      // Inner glow core
+      const core = new THREE.Mesh(new THREE.SphereGeometry(size * 0.4, 16, 12),
+        new THREE.MeshStandardMaterial({
+          color: hot ? 0xff8800 : 0x66bbff, transparent: true, opacity: 0.3,
+          emissive: hot ? 0xff6600 : 0x4499ff, emissiveIntensity: 1.2,
+        }));
+      core.position.set(x, size + 0.4, z);
+      this.rig.add(core);
+      // Heat coils (hot only)
+      if (hot) {
+        const coilMat = new THREE.MeshStandardMaterial({ color: 0xff3300, emissive: 0xff2200, emissiveIntensity: 0.8, roughness: 0.6 });
+        for (let i = 0; i < 4; i++) {
+          const coil = new THREE.Mesh(new THREE.TorusGeometry(size * 0.6, 0.04, 8, 24), coilMat);
+          coil.position.set(x, size * 0.3 + i * size * 0.5, z);
+          coil.rotation.x = Math.PI / 2;
+          this.rig.add(coil);
+        }
+      }
+      // Frost crystals (frost only)
+      if (!hot) {
+        const iceMat = new THREE.MeshStandardMaterial({ color: 0xaaddff, transparent: true, opacity: 0.5, roughness: 0.1, metalness: 0.3 });
+        for (let i = 0; i < 6; i++) {
+          const crystal = new THREE.Mesh(new THREE.OctahedronGeometry(0.15, 0), iceMat);
+          const a = (i / 6) * Math.PI * 2;
+          crystal.position.set(x + Math.cos(a) * size * 0.5, size * 0.2 + Math.random() * size, z + Math.sin(a) * size * 0.5);
+          crystal.rotation.set(Math.random(), Math.random(), Math.random());
+          this.rig.add(crystal);
+        }
+      }
       this.rigLight.color.setHex(hot ? 0xff6a00 : 0x4aa8ff);
       this.rigLight.position.set(x, size + 3, z);
       this.rigBase = 60;
     } else if (kind === "spark") {
       const rodMat = new THREE.MeshStandardMaterial({ color: 0x7d848a, metalness: 0.9, roughness: 0.35 });
+      const baseMat = new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.8, roughness: 0.5 });
+      // Base plate
+      const basePlate = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.15, 1.2), baseMat);
+      basePlate.position.set(x, 0.075, z);
+      basePlate.castShadow = true;
+      this.rig.add(basePlate);
+      // Insulator blocks
+      const insulMat = new THREE.MeshStandardMaterial({ color: 0x8a6040, roughness: 0.8 });
       for (const dx of [-1.2, 1.2]) {
-        const rod = new THREE.Mesh(new THREE.BoxGeometry(0.18, 3.4, 0.18), rodMat);
-        rod.position.set(x + dx, 1.7, z);
+        const insul = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.5, 0.35), insulMat);
+        insul.position.set(x + dx, 0.4, z);
+        this.rig.add(insul);
+      }
+      // Electrode rods with tapered tips
+      for (const dx of [-1.2, 1.2]) {
+        const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, 3.0, 8), rodMat);
+        rod.position.set(x + dx, 1.9, z);
         rod.castShadow = true;
         this.rig.add(rod);
+        // Tip sphere
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 6), rodMat);
+        tip.position.set(x + dx, 3.4, z);
+        this.rig.add(tip);
       }
-      // jagged bolt between the rods
+      // High-voltage cables (curved lines from base to rod tops)
+      const cableMat = new THREE.LineBasicMaterial({ color: 0x222222 });
+      for (const dx of [-1.2, 1.2]) {
+        const pts: THREE.Vector3[] = [];
+        for (let i = 0; i <= 6; i++) {
+          const t = i / 6;
+          pts.push(new THREE.Vector3(x + dx, 0.5 + t * 2.9 + Math.sin(t * Math.PI) * 0.2, z + 0.4));
+        }
+        const cable = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), cableMat);
+        this.rig.add(cable);
+      }
+      // Jagged bolt between the rods
       const pts: THREE.Vector3[] = [];
-      for (let i = 0; i <= 8; i++) {
-        pts.push(new THREE.Vector3(x - 1.2 + (2.4 * i) / 8 + (i % 2 ? 0.35 : -0.1), 3.1 - i * 0.12, z));
+      for (let i = 0; i <= 10; i++) {
+        pts.push(new THREE.Vector3(
+          x - 1.2 + (2.4 * i) / 10 + (i % 2 ? 0.3 : -0.15),
+          3.2 - i * 0.08 + (i % 3 === 0 ? 0.15 : 0),
+          z + (i % 2 ? 0.08 : -0.08)));
       }
       this.bolt = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
-        new THREE.LineBasicMaterial({ color: 0xfff36b }));
+        new THREE.LineBasicMaterial({ color: 0xfff36b, linewidth: 2 }));
       this.rig.add(this.bolt);
+      // Secondary bolt (thinner, offset)
+      const pts2: THREE.Vector3[] = [];
+      for (let i = 0; i <= 8; i++) {
+        pts2.push(new THREE.Vector3(
+          x - 1.1 + (2.2 * i) / 8 + (i % 2 ? -0.2 : 0.15),
+          3.15 - i * 0.1 + (i % 2 ? 0.1 : -0.05),
+          z - 0.12));
+      }
+      const bolt2 = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts2),
+        new THREE.LineBasicMaterial({ color: 0xffee88, transparent: true, opacity: 0.6 }));
+      this.rig.add(bolt2);
       this.rigLight.color.setHex(0xfff36b);
       this.rigLight.position.set(x, 3.4, z);
       this.rigBase = 40;
     } else if (kind === "laser") {
-      const emitter = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5),
-        new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8, roughness: 0.4 }));
-      emitter.position.set(x - 4.5, size + 0.4, z);
-      const beam = new THREE.Mesh(new THREE.BoxGeometry(7.5, 0.07, 0.07),
+      const metalMat = new THREE.MeshStandardMaterial({ color: 0x333333, metalness: 0.85, roughness: 0.3 });
+      const accentMat = new THREE.MeshStandardMaterial({ color: 0x22aa44, emissive: 0x116622, emissiveIntensity: 0.5 });
+      // Optical bench (long rail)
+      const bench = new THREE.Mesh(new THREE.BoxGeometry(9, 0.12, 0.8), metalMat);
+      bench.position.set(x - 0.5, 0.06, z);
+      bench.castShadow = true;
+      this.rig.add(bench);
+      // Rail grooves
+      for (const dz of [-0.25, 0.25]) {
+        const groove = new THREE.Mesh(new THREE.BoxGeometry(8.5, 0.03, 0.06),
+          new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.9, roughness: 0.2 }));
+        groove.position.set(x - 0.5, 0.13, z + dz);
+        this.rig.add(groove);
+      }
+      // Emitter housing (cylindrical with lens)
+      const emitterBody = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.7, 12), metalMat);
+      emitterBody.rotation.z = Math.PI / 2;
+      emitterBody.position.set(x - 4.5, size + 0.4, z);
+      emitterBody.castShadow = true;
+      this.rig.add(emitterBody);
+      // Emitter lens
+      const lens = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 8, 0, Math.PI * 2, 0, Math.PI / 2),
+        new THREE.MeshStandardMaterial({ color: 0xff4444, transparent: true, opacity: 0.6, roughness: 0.05, metalness: 0.1 }));
+      lens.rotation.z = -Math.PI / 2;
+      lens.position.set(x - 4.1, size + 0.4, z);
+      this.rig.add(lens);
+      // Target (detector on the other end)
+      const target = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.08, 16),
+        new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.7, roughness: 0.4 }));
+      target.rotation.z = Math.PI / 2;
+      target.position.set(x + 3.8, size + 0.4, z);
+      this.rig.add(target);
+      // Target crosshair
+      const crossMat = new THREE.LineBasicMaterial({ color: 0x22cc44 });
+      const ch1 = new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(x + 3.8, size + 0.15, z),
+        new THREE.Vector3(x + 3.8, size + 0.65, z)]), crossMat);
+      const ch2 = new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+        new THREE.Vector3(x + 3.8, size + 0.4, z - 0.3),
+        new THREE.Vector3(x + 3.8, size + 0.4, z + 0.3)]), crossMat);
+      this.rig.add(ch1, ch2);
+      // Support posts
+      for (const dx of [-4.5, -1, 2, 3.8]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, size + 0.3, 6), metalMat);
+        post.position.set(x + dx, (size + 0.3) / 2, z);
+        this.rig.add(post);
+      }
+      // Laser beam (glowing line with glow sprite)
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(7.5, 0.05, 0.05),
         new THREE.MeshStandardMaterial({ color: 0xff2020, emissive: 0xff0000, emissiveIntensity: 2.4 }));
-      beam.position.set(x - 0.8, size + 0.4, z);
-      this.rig.add(emitter, beam);
+      beam.position.set(x - 0.35, size + 0.4, z);
+      this.rig.add(beam);
+      // Beam glow halo
+      const glow = new THREE.Mesh(new THREE.BoxGeometry(7.5, 0.2, 0.2),
+        new THREE.MeshStandardMaterial({ color: 0xff0000, transparent: true, opacity: 0.08, side: THREE.DoubleSide, depthWrite: false }));
+      glow.position.set(x - 0.35, size + 0.4, z);
+      this.rig.add(glow);
+      // Power indicator LED
+      const led = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6),
+        new THREE.MeshStandardMaterial({ color: 0x00ff00, emissive: 0x00ff00, emissiveIntensity: 1.5 }));
+      led.position.set(x - 4.5, size + 0.8, z);
+      this.rig.add(led);
       this.rigLight.color.setHex(0xff2020);
       this.rigLight.position.set(x, size + 1.5, z);
       this.rigBase = 25;

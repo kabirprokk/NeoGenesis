@@ -6,6 +6,11 @@
   "scripts": {
     "dev": "npm run dev -w frontend",
     "build": "npm run build -w shared & npm run build -w frontend",
-    "typecheck": "tsc --noEmit -p frontend"
+    "typecheck": "tsc --noEmit -p frontend",
+    "auto-push": "node automation/auto-push.mjs",
+    "auto-push:ps": "powershell -ExecutionPolicy Bypass -File automation/auto-push.ps1",
+    "auto-push:once": "node automation/auto-push.mjs --once",
+    "auto-push:install": "powershell -ExecutionPolicy Bypass -File automation/install.ps1",
+    "auto-push:status": "powershell -NoProfile -Command \"Get-Job | Format-Table; git -C . status -b; git log --oneline -3\""
   }
 }
