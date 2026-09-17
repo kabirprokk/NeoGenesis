@@ -587,7 +587,7 @@ function mergeGeos(a: THREE.BufferGeometry, b: THREE.BufferGeometry): THREE.Buff
 }
 
 // ─── Public registry ───
-export const MODEL_GEO: Record<string, GeoFn> = {
+const MODEL_GEO: Record<string, GeoFn> = {
   aerospace: aerospaceGeo,
   maritime: maritimeGeo,
   crate: crateGeo,
@@ -614,8 +614,32 @@ export const MODEL_GEO: Record<string, GeoFn> = {
   buoy: buoyGeo,
 };
 
+// Geometry cache: same class + same size → reuse. Prevents regenerating
+// identical BufferGeometry every frame for many bodies of the same kind.
+const geoCache = new Map<string, THREE.BufferGeometry>();
+const CACHE_MAX = 120;
+
 /** Get geometry for a model class. Returns null if class unknown (use fallback). */
 export function modelGeometry(modelClass: string, sizeM: number): THREE.BufferGeometry | null {
   const fn = MODEL_GEO[modelClass];
-  return fn ? fn(sizeM) : null;
+  if (!fn) return null;
+  // Quantise size to 4 decimal places to hit cache for near-identical bodies
+  const key = `${modelClass}:${sizeM.toFixed(4)}`;
+  let geo = geoCache.get(key);
+  if (!geo) {
+    geo = fn(sizeM);
+    if (geoCache.size >= CACHE_MAX) {
+      // Evict oldest entry
+      const first = geoCache.keys().next().value!;
+      geoCache.delete(first);
+    }
+    geoCache.set(key, geo);
+  }
+  return geo;
+}
+
+/** Dispose all cached geometries (call on scene reset). */
+export function disposeModelGeometries(): void {
+  for (const g of geoCache.values()) g.dispose();
+  geoCache.clear();
 }
