@@ -30,6 +30,7 @@ export interface Body {
   landedT: number | null; // first touchdown time (ground or fluid surface) for landing-order races
   dragProfile: string; dragCd: number; areaM2: number;
   events: string[];
+  modelClass?: string; // model registry class for class-specific rendering
 }
 export interface EnvPreset {
   gravity: number; airDensity: number; ambientC: number; groundMuS: number; groundMuK: number; name: string;

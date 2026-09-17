@@ -75,5 +75,6 @@ export function spawnModel(world: EngineWorld, index: number, pos?: { x: number;
     dragProfile: m.dragProfile, massOverrideKg: m.massKg,
   });
   b.id = m.id;
+  b.modelClass = m.class;
   return b.id;
 }

@@ -7,6 +7,7 @@
 // trees, no animals — physics is the content.
 import * as THREE from "three";
 import { MATERIALS, type EngineWorld, type FluidBox } from "../../../engine/src/index.js";
+import { modelGeometry } from "../three/geometries.js";
 
 /** Per-material render truth: metals shine, minerals stay matte. */
 const MATERIAL_VISUAL: Record<string, { metalness: number; roughness: number; opacity?: number; envMapIntensity?: number }> = {
@@ -312,7 +313,11 @@ export class PlaneWorld {
           envMapIntensity: v.envMapIntensity ?? 0.7,
         });
         if (v.opacity !== undefined) { mat.transparent = true; mat.opacity = v.opacity; }
-        if (b.shape === "sphere") {
+        // Class-specific geometry: each model class gets a distinctive 3D shape.
+        const classGeo = b.modelClass ? modelGeometry(b.modelClass, b.radiusM) : null;
+        if (classGeo) {
+          m = new THREE.Mesh(classGeo, mat);
+        } else if (b.shape === "sphere") {
           m = new THREE.Mesh(new THREE.SphereGeometry(b.radiusM, 32, 24), mat);
         } else {
           const geo = new THREE.BoxGeometry(
