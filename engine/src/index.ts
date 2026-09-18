@@ -9,3 +9,7 @@ export * from "./experience.js";
 export * from "./neo.js";
 export * from "./science.js";
 export * from "./tools.js";
+export * from "./collision-groups.js";
+export * from "./physics-tunable.js";
+export * from "./spatial-grid.js";
+export * from "./cannon-integration.js";

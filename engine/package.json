@@ -3,11 +3,20 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "test": "tsx test/run-tests.mts",
-    "experience": "tsx src/cli.ts"
+    "test": "npx vitest run",
+    "test:watch": "npx vitest",
+    "test:coverage": "npx vitest run --coverage",
+    "build": "tsc",
+    "experience": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@types/node": "^26.6.1",
     "tsx": "^4.19.1",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "vitest": "^5.0.1"
+  },
+  "dependencies": {
+    "cannon-es": "^0.20.0"
   }
 }

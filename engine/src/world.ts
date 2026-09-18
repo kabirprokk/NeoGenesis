@@ -5,6 +5,10 @@ import { PHYSICS } from "./constants.js";
 import { MATERIALS, DRAG_CD, type MaterialDef } from "./materials.js";
 import { SPECIFIC_HEAT, EMISSIVITY, H_CONV, altitudeDensity } from "./science.js";
 import { machCdFactor, magnusCl } from "./physics.js";
+import { CollisionGroup, COLLISION_CONFIGS, type CollisionConfig, shouldCollide, type CollisionMask } from "./collision-groups.js";
+import { DEFAULT_WORLD_CONFIG, DEFAULT_COLLISION_TUNING, DEFAULT_DRAG_TUNING, DEFAULT_SLEEP_TUNING, DEFAULT_PHYSICS_CONFIG, type PhysicsConfig, type WorldConfig, type CollisionTuning, type DragTuning, type SleepTuning } from "./physics-tunable.js";
+import { BroadPhaseDetector, type SpatialGrid } from "./spatial-grid.js";
+import { CannonWorld } from "./cannon-integration.js";
 
 export interface Vec3 { x: number; y: number; z: number }
 export type Shape = "sphere" | "box";
@@ -57,9 +61,85 @@ export class EngineWorld {
   time = 0;
   log: string[] = [];
 
+  // ─── Enhanced physics configuration ──────────────────────────
+  config: PhysicsConfig = { ...DEFAULT_PHYSICS_CONFIG };
+  /** Tunable world configuration */
+  worldConfig: WorldConfig = { ...DEFAULT_WORLD_CONFIG };
+  /** Collision tuning parameters */
+  collisionTuning: CollisionTuning = { ...DEFAULT_COLLISION_TUNING };
+  /** Drag and aerodynamic tuning */
+  dragTuning: DragTuning = { ...DEFAULT_DRAG_TUNING };
+  /** Sleep and optimization tuning */
+  sleepTuning: SleepTuning = { ...DEFAULT_SLEEP_TUNING };
+
+  // ─── Broad-phase spatial grid ────────────────────────────────
+  broadPhase: BroadPhaseDetector = new BroadPhaseDetector(DEFAULT_WORLD_CONFIG.spatialCellSize); // eager: step() works without initPhysics()
+
+  // ─── Collision groups ────────────────────────────────────────
+  /** Map of body ID → collision config */
+  collisionConfigs: Map<string, CollisionConfig> = new Map();
+
+  // ─── cannon-es integration ───────────────────────────────────
+  cannonWorld: CannonWorld | null = null;
+  cannonEnabled: boolean = false;
+
+  // ─── Body sleep tracking ─────────────────────────────────────
+  /** Map of body ID → last active time */
+  lastActiveTime: Map<string, number> = new Map();
+  /** Map of body ID → consecutive low-speed steps */
+  sleepCounters: Map<string, number> = new Map();
+
+  // ─── Statistics ──────────────────────────────────────────────
+  stats = {
+    broadPhaseCells: 0,
+    broadPhasePairs: 0,
+    collisionChecksThisStep: 0,
+    bodiesAsleep: 0,
+    cannonBodies: 0,
+    stepCount: 0,
+  };
+
   addFluid(f: FluidBox): number { this.fluids.push(f); return this.fluids.length - 1; }
   clearFluids(): void { this.fluids = []; }
   tethers: SloshTether[] = [];
+
+  /** Initialize the enhanced physics world with optional cannon-es integration */
+  initPhysics(config?: Partial<PhysicsConfig>, enableCannon: boolean = false): void {
+    if (config) {
+      this.config = { ...DEFAULT_PHYSICS_CONFIG, ...config };
+      this.worldConfig = { ...DEFAULT_WORLD_CONFIG, ...config.world };
+      this.collisionTuning = { ...DEFAULT_COLLISION_TUNING, ...config.collision };
+      this.dragTuning = { ...DEFAULT_DRAG_TUNING, ...config.drag };
+      this.sleepTuning = { ...DEFAULT_SLEEP_TUNING, ...config.sleep };
+    }
+
+    // Initialize broad-phase spatial grid
+    this.broadPhase = new BroadPhaseDetector(this.worldConfig.spatialCellSize);
+
+    // Initialize cannon-es if requested
+    if (enableCannon) {
+      this.cannonWorld = new CannonWorld();
+      this.cannonWorld.init({
+        gravity: this.env.gravity,
+        tolerance: this.worldConfig.solverTolerance,
+        iterations: this.worldConfig.solverIterations,
+        allowSleep: this.sleepTuning.enableSleep,
+      });
+      this.cannonEnabled = true;
+    }
+
+    console.log(`[EngineWorld] Physics initialized: ${this.worldConfig.maxBodies} max bodies, ${this.worldConfig.fixedDt * 1000}ms timestep, broadPhase=${this.worldConfig.useBroadPhase}, cannon=${this.cannonEnabled}`);
+  }
+
+  /** Assign a collision configuration to a body */
+  setCollisionConfig(bodyId: string, config: CollisionConfig): void {
+    this.collisionConfigs.set(bodyId, config);
+  }
+
+  /** Get collision config for a body, or default */
+  getCollisionConfig(bodyId: string): CollisionConfig {
+    return this.collisionConfigs.get(bodyId) ?? COLLISION_CONFIGS.dynamicSolid;
+  }
 
   /** Tie a ghost cargo core to its shell (spring-damper in both directions). */
   tether(cargoId: string, shellId: string, fill: number): SloshTether {
@@ -91,7 +171,7 @@ export class EngineWorld {
       id: `b${nextId++}`, shape, material: mat, radiusM: sizeM,
       halfM: shape === "box" ? { x: sizeM * sc.x, y: sizeM * sc.y, z: sizeM * sc.z } : undefined,
       pos: opts.pos ?? { x: 0, y: 10, z: 0 }, vel: opts.vel ?? { x: 0, y: 0, z: 0 },
-      massKg: opts.massOverrideKg ?? mat.density * volume,
+      massKg: opts.static ? 0 : (opts.massOverrideKg ?? mat.density * volume),
       tempC: opts.tempC ?? this.env.ambientC,
       broken: false, molten: false, burning: false,
       fluid: null, isStatic: opts.static ?? false,
@@ -102,31 +182,229 @@ export class EngineWorld {
     };
     this.bodies.push(b);
     if (opts.cargoOfId) this.tether(b.id, opts.cargoOfId, opts.fillFrac ?? 1);
+
+    // Assign default collision config
+    const shapeStr = shape === "sphere" ? "dynamicSolid" : "dynamicSolid";
+    this.setCollisionConfig(b.id, { ...COLLISION_CONFIGS.dynamicSolid, groupMask: opts.static ? CollisionGroup.STRUCTURES : CollisionGroup.DYNAMIC_SOLID });
+    if (opts.static) {
+      this.setCollisionConfig(b.id, { ...COLLISION_CONFIGS.structure, groupMask: CollisionGroup.STRUCTURES });
+    }
+
+    // Initialize cannon-es body if enabled
+    if (this.cannonEnabled && this.cannonWorld) {
+      this.cannonWorld.createCannonBody({
+        id: b.id,
+        shape,
+        radiusM: b.radiusM,
+        halfM: b.halfM,
+        pos: b.pos,
+        massKg: b.massKg,
+        isStatic: b.isStatic,
+      });
+      // Set collision filter on the cannon body
+      const cannonBody = this.cannonWorld.bodyMap.get(b.id);
+      if (cannonBody) {
+        const config = this.getCollisionConfig(b.id);
+        cannonBody.collisionFilterGroup = config.groupMask;
+        cannonBody.collisionFilterMask = config.layerMask;
+      }
+      this.stats.cannonBodies = this.cannonWorld.getBodyCount();
+    }
+
     return b;
   }
 
   /** One fixed step. Returns event strings produced this step.
    * CCD-lite: fast steps subdivide so no body moves more than half its
-   * smallest extent per sub-integration (tunneling guard, ≤32 substeps). */
+   * smallest extent per sub-integration (tunneling guard, ≤32 substeps).
+   * Broad-phase: spatial grid reduces collision checks from O(n²) to O(n·k). */
   step(dt: number): string[] {
     const out: string[] = [];
+    const cfg = this.worldConfig;
     let nSub = 1;
     for (const b of this.bodies) {
       if (b.isStatic || (b.broken && b.molten)) continue;
       const sp = Math.hypot(b.vel.x, b.vel.y, b.vel.z);
       const char = b.shape === "sphere" ? b.radiusM : Math.min(b.halfM!.x, b.halfM!.y, b.halfM!.z);
       if (char > 1e-6 && sp * dt > char * 0.5) {
-        nSub = Math.max(nSub, Math.min(32, Math.ceil((sp * dt) / (char * 0.5))));
+        nSub = Math.max(nSub, Math.min(cfg.maxSubsteps, Math.ceil((sp * dt) / (char * 0.5))));
       }
     }
     const sdt = dt / nSub;
     for (let k = 0; k < nSub; k++) {
       this.tetherPass(sdt);
       this.integrate(sdt, out);
-      this.collidePairs(out);
+      // Sleep check before broad-phase
+      this.checkSleep(sdt);
+      // Broad-phase collision detection
+      this.collideBroadPhase(out);
       this.time += sdt;
     }
+    this.stats.stepCount++;
     return out;
+  }
+
+  /** Sleep management: put slow-moving bodies to sleep for performance */
+  private checkSleep(dt: number): void {
+    if (!this.sleepTuning.enableSleep) return;
+    const threshold = this.sleepTuning.speedThreshold;
+    const timeout = this.sleepTuning.timeThreshold;
+
+    for (const b of this.bodies) {
+      if (b.isStatic || b.broken || b.molten) continue;
+      const speed = Math.hypot(b.vel.x, b.vel.y, b.vel.z);
+      if (speed < threshold) {
+        const counter = (this.sleepCounters.get(b.id) ?? 0) + 1;
+        this.sleepCounters.set(b.id, counter);
+        const stepsNeeded = Math.ceil(timeout / this.worldConfig.fixedDt);
+        if (counter >= stepsNeeded && !b.settled) {
+          // Body is sleeping — zero its velocity
+          b.vel.x = 0; b.vel.y = 0; b.vel.z = 0;
+          b.spin.x = 0; b.spin.y = 0; b.spin.z = 0;
+          this.stats.bodiesAsleep++;
+        }
+      } else {
+        this.sleepCounters.set(b.id, 0);
+        this.lastActiveTime.set(b.id, this.time);
+      }
+    }
+  }
+
+  /** Broad-phase collision detection using spatial grid. */
+  private collideBroadPhase(out: string[]): void {
+    // Update broad-phase grid with current body positions
+    if (this.worldConfig.useBroadPhase) {
+      this.broadPhase.update(this.bodies);
+      this.stats.broadPhaseCells = this.broadPhase.getGrid().cellCount;
+
+      const pairs = this.broadPhase.getPairs();
+      this.stats.broadPhasePairs = pairs.length;
+      this.stats.collisionChecksThisStep = pairs.length;
+
+      // Narrow-phase collision for each potential pair
+      for (const [aIdx, bIdx] of pairs) {
+        const a = this.bodies[aIdx];
+        const b = this.bodies[bIdx];
+        if (!a || !b) continue;
+
+        // Check collision groups/layers
+        const aConfig = this.getCollisionConfig(a.id);
+        const bConfig = this.getCollisionConfig(b.id);
+        if (!shouldCollide(aConfig, bConfig)) continue;
+
+        // Skip static-static pairs
+        if (a.isStatic && b.isStatic) continue;
+        // Skip ghost bodies with each other
+        if (a.ghost || b.ghost) continue;
+
+        this.collidePair(a, b, out);
+      }
+    } else {
+      // Fall back to brute-force O(n²)
+      this.collidePairs(out);
+    }
+  }
+
+  /** Process a single collision pair (extracted from collidePairs) */
+  private collidePair(a: Body, b: Body, out: string[]): void {
+    const extents = (body: Body): { x: number; y: number; z: number } => body.shape === "sphere"
+      ? { x: body.radiusM, y: body.radiusM, z: body.radiusM }
+      : { x: body.halfM!.x, y: body.halfM!.y, z: body.halfM!.z };
+
+    const ea = extents(a), ec = extents(b);
+    let nx = 0, ny = 0, nz = 0, overlap = 0;
+
+    if (a.shape === "sphere" && b.shape === "sphere") {
+      const dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y, dz = b.pos.z - a.pos.z;
+      const d = Math.hypot(dx, dy, dz);
+      const rr = a.radiusM + b.radiusM;
+      if (d >= rr) return;
+      if (d > 1e-9) { nx = dx / d; ny = dy / d; nz = dz / d; } else { ny = 1; }
+      overlap = rr - d;
+    } else if (a.shape === "box" && b.shape === "box") {
+      const dx = b.pos.x - a.pos.x, dy = b.pos.y - a.pos.y, dz = b.pos.z - a.pos.z;
+      const ox = ea.x + ec.x - Math.abs(dx), oy = ea.y + ec.y - Math.abs(dy), oz = ea.z + ec.z - Math.abs(dz);
+      if (ox <= 0 || oy <= 0 || oz <= 0) return;
+      if (ox <= oy && ox <= oz) { nx = dx >= 0 ? 1 : -1; overlap = ox; }
+      else if (oy <= oz) { ny = dy >= 0 ? 1 : -1; overlap = oy; }
+      else { nz = dz >= 0 ? 1 : -1; overlap = oz; }
+    } else {
+      const s = a.shape === "sphere" ? a : b;
+      const box = a.shape === "box" ? a : b;
+      const eb = extents(box);
+      const qx = Math.max(box.pos.x - eb.x, Math.min(s.pos.x, box.pos.x + eb.x));
+      const qy = Math.max(box.pos.y - eb.y, Math.min(s.pos.y, box.pos.y + eb.y));
+      const qz = Math.max(box.pos.z - eb.z, Math.min(s.pos.z, box.pos.z + eb.z));
+      const dx = s.pos.x - qx, dy = s.pos.y - qy, dz = s.pos.z - qz;
+      const d = Math.hypot(dx, dy, dz);
+      if (d >= s.radiusM) return;
+      let fx = 0, fy = 0, fz = 0, ov = 0;
+      if (d > 1e-9) { fx = dx / d; fy = dy / d; fz = dz / d; ov = s.radiusM - d; }
+      else {
+        const px = eb.x - Math.abs(s.pos.x - box.pos.x);
+        const py = eb.y - Math.abs(s.pos.y - box.pos.y);
+        const pz = eb.z - Math.abs(s.pos.z - box.pos.z);
+        if (px <= py && px <= pz) { fx = s.pos.x >= box.pos.x ? 1 : -1; ov = px + s.radiusM; }
+        else if (py <= pz) { fy = s.pos.y >= box.pos.y ? 1 : -1; ov = py + s.radiusM; }
+        else { fz = s.pos.z >= box.pos.z ? 1 : -1; ov = pz + s.radiusM; }
+      }
+      if (s === a) { fx = -fx; fy = -fy; fz = -fz; }
+      nx = fx; ny = fy; nz = fz; overlap = ov;
+    }
+    if (overlap <= 0) return;
+
+    // Mass-split positional correction
+    const ima = a.isStatic ? 0 : 1 / a.massKg;
+    const imc = b.isStatic ? 0 : 1 / b.massKg;
+    const imSum = ima + imc;
+    if (imSum <= 0) return;
+    const corr = overlap / imSum;
+    a.pos.x -= nx * corr * ima; a.pos.y -= ny * corr * ima; a.pos.z -= nz * corr * ima;
+    b.pos.x += nx * corr * imc; b.pos.y += ny * corr * imc; b.pos.z += nz * corr * imc;
+
+    // Impulse along the contact normal
+    const vn = (b.vel.x - a.vel.x) * nx + (b.vel.y - a.vel.y) * ny + (b.vel.z - a.vel.z) * nz;
+    if (vn < 0) {
+      const e = (a.material.restitution + b.material.restitution) / 2;
+      const clampedE = Math.min(this.collisionTuning.maxRestitution, Math.max(this.collisionTuning.minRestitution, e));
+      const jimp = (-(1 + clampedE) * vn) / imSum;
+      a.vel.x -= nx * jimp * ima; a.vel.y -= ny * jimp * ima; a.vel.z -= nz * jimp * ima;
+      b.vel.x += nx * jimp * imc; b.vel.y += ny * jimp * imc; b.vel.z += nz * jimp * imc;
+
+      // Resting-contact friction
+      const fr = Math.max(0, 1 - 0.2 * (1 / 120) * 60);
+      const imASum = ima / imSum;
+      const imCSum = imc / imSum;
+      a.vel.x *= 1 - (1 - fr) * imASum; a.vel.z *= 1 - (1 - fr) * imASum;
+      b.vel.x *= 1 - (1 - fr) * imCSum; b.vel.z *= 1 - (1 - fr) * imCSum;
+
+      const speed = -vn;
+      if (speed > this.collisionTuning.impactEventThreshold && this.time - Math.max(a.hitT, b.hitT) > this.collisionTuning.impactCooldown) {
+        a.hitT = this.time; b.hitT = this.time;
+        const ev = `${a.id} (${a.material.name}) collided with ${b.id} (${b.material.name}) at ${speed.toFixed(1)} m/s.`;
+        a.events.push(ev); b.events.push(ev); out.push(ev); this.log.push(ev);
+      }
+
+      // Fracture check
+      if (this.config.structural.enableFracture) {
+        const mu = ima + imc > 0 ? 1 / imSum : 0;
+        for (const bd of [a, b]) {
+          if (bd.isStatic || bd.broken) continue;
+          const brittle = ["glass", "concrete", "ice"].includes(bd.material.id);
+          const spread = !brittle ? this.config.structural.brittleSpreadFactor : bd.shape === "sphere" ? this.config.structural.sphereSpreadFactor : this.config.structural.boxSpreadFactor;
+          const r0 = bd.shape === "sphere" ? bd.radiusM : bd.halfM!.y;
+          const area = bd.shape === "sphere" ? Math.PI * r0 * r0 * spread : (2 * r0) * (2 * r0) * spread;
+          const ke = 0.5 * mu * speed * speed;
+          const pMpa = ke / Math.max(1e-6, area) / 1e6;
+          const ult = bd.material.ultimateMpa ?? bd.material.tensileMpa ?? Infinity;
+          if (pMpa > ult) {
+            bd.broken = true;
+            const bev = `${bd.id} (${bd.material.name}) SHATTERED in collision at ${speed.toFixed(1)} m/s — ${pMpa.toFixed(0)} MPa > ${ult} MPa ultimate.`;
+            bd.events.push(bev); out.push(bev); this.log.push(bev);
+          }
+        }
+      }
+    }
   }
 
   /** Slosh pass: ghost cargo cores pull on their shells through a
@@ -334,107 +612,35 @@ export class EngineWorld {
     }
   }
 
-  /** Body-vs-body contact: sphere/sphere, box/box (AABB, no rotation in this
-   *  engine), sphere/box via closest point. Statics have infinite mass, so
-   *  tank walls now contain bodies. Impulse uses pair-averaged restitution;
-   *  hard hits fracture against each body's own ultimate strength. */
+  /** Body-vs-body contact (fallback path). Uses collidePair for each pair. */
   private collidePairs(out: string[]): void {
     const bs = this.bodies;
-    const extents = (b: Body): Vec3 => b.shape === "sphere"
-      ? { x: b.radiusM, y: b.radiusM, z: b.radiusM }
-      : { x: b.halfM!.x, y: b.halfM!.y, z: b.halfM!.z };
     for (let i = 0; i < bs.length; i++) {
       for (let j = i + 1; j < bs.length; j++) {
-        const a = bs[i], c = bs[j];
-        if (a.isStatic && c.isStatic) continue;
-        if (a.ghost || c.ghost) continue; // nested cargo flies with its shell
-        const ea = extents(a), ec = extents(c);
-        let nx = 0, ny = 0, nz = 0, overlap = 0;
-        if (a.shape === "sphere" && c.shape === "sphere") {
-          const dx = c.pos.x - a.pos.x, dy = c.pos.y - a.pos.y, dz = c.pos.z - a.pos.z;
-          const d = Math.hypot(dx, dy, dz);
-          const rr = a.radiusM + c.radiusM;
-          if (d >= rr) continue;
-          if (d > 1e-9) { nx = dx / d; ny = dy / d; nz = dz / d; } else { ny = 1; }
-          overlap = rr - d;
-        } else if (a.shape === "box" && c.shape === "box") {
-          const dx = c.pos.x - a.pos.x, dy = c.pos.y - a.pos.y, dz = c.pos.z - a.pos.z;
-          const ox = ea.x + ec.x - Math.abs(dx), oy = ea.y + ec.y - Math.abs(dy), oz = ea.z + ec.z - Math.abs(dz);
-          if (ox <= 0 || oy <= 0 || oz <= 0) continue;
-          if (ox <= oy && ox <= oz) { nx = dx >= 0 ? 1 : -1; overlap = ox; }
-          else if (oy <= oz) { ny = dy >= 0 ? 1 : -1; overlap = oy; }
-          else { nz = dz >= 0 ? 1 : -1; overlap = oz; }
-        } else {
-          // Sphere vs box: closest point on the box to the sphere center.
-          const s = a.shape === "sphere" ? a : c;
-          const box = a.shape === "box" ? a : c;
-          const eb = extents(box);
-          const qx = Math.max(box.pos.x - eb.x, Math.min(s.pos.x, box.pos.x + eb.x));
-          const qy = Math.max(box.pos.y - eb.y, Math.min(s.pos.y, box.pos.y + eb.y));
-          const qz = Math.max(box.pos.z - eb.z, Math.min(s.pos.z, box.pos.z + eb.z));
-          const dx = s.pos.x - qx, dy = s.pos.y - qy, dz = s.pos.z - qz;
-          const d = Math.hypot(dx, dy, dz);
-          if (d >= s.radiusM) continue; // separated
-          let fx = 0, fy = 0, fz = 0, ov = 0;
-          if (d > 1e-9) { fx = dx / d; fy = dy / d; fz = dz / d; ov = s.radiusM - d; }
-          else {
-            // Center inside (or on) the box: eject along min-penetration axis.
-            const px = eb.x - Math.abs(s.pos.x - box.pos.x);
-            const py = eb.y - Math.abs(s.pos.y - box.pos.y);
-            const pz = eb.z - Math.abs(s.pos.z - box.pos.z);
-            if (px <= py && px <= pz) { fx = s.pos.x >= box.pos.x ? 1 : -1; ov = px + s.radiusM; }
-            else if (py <= pz) { fy = s.pos.y >= box.pos.y ? 1 : -1; ov = py + s.radiusM; }
-            else { fz = s.pos.z >= box.pos.z ? 1 : -1; ov = pz + s.radiusM; }
-          }
-          // Contact normal must point from a to c: f runs box→sphere.
-          if (s === a) { fx = -fx; fy = -fy; fz = -fz; }
-          nx = fx; ny = fy; nz = fz; overlap = ov;
-        }
-        if (overlap <= 0) continue;
-        // Mass-split positional correction (statics don't move).
-        const ima = a.isStatic ? 0 : 1 / a.massKg;
-        const imc = c.isStatic ? 0 : 1 / c.massKg;
-        const imSum = ima + imc;
-        if (imSum <= 0) continue;
-        const corr = overlap / imSum;
-        a.pos.x -= nx * corr * ima; a.pos.y -= ny * corr * ima; a.pos.z -= nz * corr * ima;
-        c.pos.x += nx * corr * imc; c.pos.y += ny * corr * imc; c.pos.z += nz * corr * imc;
-        // Impulse along the contact normal.
-        const vn = (c.vel.x - a.vel.x) * nx + (c.vel.y - a.vel.y) * ny + (c.vel.z - a.vel.z) * nz;
-        if (vn < 0) {
-          const e = (a.material.restitution + c.material.restitution) / 2;
-          const jimp = (-(1 + e) * vn) / imSum;
-          a.vel.x -= nx * jimp * ima; a.vel.y -= ny * jimp * ima; a.vel.z -= nz * jimp * ima;
-          c.vel.x += nx * jimp * imc; c.vel.y += ny * jimp * imc; c.vel.z += nz * jimp * imc;
-          // Resting-contact friction: bleed tangential slide on hard contact.
-          const fr = Math.max(0, 1 - 0.2 * (1 / 120) * 60);
-          a.vel.x *= 1 - (1 - fr) * (ima / imSum); a.vel.z *= 1 - (1 - fr) * (ima / imSum);
-          c.vel.x *= 1 - (1 - fr) * (imc / imSum); c.vel.z *= 1 - (1 - fr) * (imc / imSum);
-          const speed = -vn;
-          if (speed > 1.5 && this.time - Math.max(a.hitT, c.hitT) > 0.5) {
-            a.hitT = this.time; c.hitT = this.time;
-            const ev = `${a.id} (${a.material.name}) collided with ${c.id} (${c.material.name}) at ${speed.toFixed(1)} m/s.`;
-            a.events.push(ev); c.events.push(ev); out.push(ev); this.log.push(ev);
-          }
-          // Fracture: reduced-mass energy vs each body's own ultimate.
-          const mu = ima + imc > 0 ? 1 / imSum : 0;
-          for (const bd of [a, c]) {
-            if (bd.isStatic || bd.broken) continue;
-            const brittle = ["glass", "concrete", "ice"].includes(bd.material.id);
-            const spread = !brittle ? 0.1 : bd.shape === "sphere" ? 0.002 : 0.007;
-            const r0 = bd.shape === "sphere" ? bd.radiusM : bd.halfM!.y;
-            const area = bd.shape === "sphere" ? Math.PI * r0 * r0 * spread : (2 * r0) * (2 * r0) * spread;
-            const ke = 0.5 * mu * speed * speed;
-            const pMpa = ke / Math.max(1e-6, area) / 1e6;
-            const ult = bd.material.ultimateMpa ?? bd.material.tensileMpa ?? Infinity;
-            if (pMpa > ult) {
-              bd.broken = true;
-              const bev = `${bd.id} (${bd.material.name}) SHATTERED in collision at ${speed.toFixed(1)} m/s — ${pMpa.toFixed(0)} MPa > ${ult} MPa ultimate.`;
-              bd.events.push(bev); out.push(bev); this.log.push(bev);
-            }
-          }
-        }
+        this.collidePair(bs[i], bs[j], out);
       }
+    }
+  }
+
+  /** Sync bodies to cannon-es for additional physics simulation */
+  syncCannonBodies(): void {
+    if (!this.cannonEnabled || !this.cannonWorld) return;
+    for (const b of this.bodies) {
+      if (b.isStatic) continue;
+      this.cannonWorld.syncBody(b.id, b.pos, b.vel);
+    }
+  }
+
+  /** Step the cannon-es simulation alongside the custom world */
+  stepCannon(dt: number): void {
+    if (!this.cannonEnabled || !this.cannonWorld) return;
+    this.cannonWorld.step(dt);
+    this.stats.cannonBodies = this.cannonWorld.getBodyCount();
+
+    // Get collision events from cannon-es
+    const cannonEvents = this.cannonWorld.getCollisionEvents();
+    for (const ev of cannonEvents) {
+      this.log.push(`[Cannon] ${ev.bodyA} ↔ ${ev.bodyB} at ${ev.impactVelocity.toFixed(1)} m/s`);
     }
   }
 
@@ -442,7 +648,10 @@ export class EngineWorld {
   run(seconds: number): string[] {
     const all: string[] = [];
     const n = Math.ceil(seconds * 120);
-    for (let i = 0; i < n; i++) all.push(...this.step(1 / 120));
+    for (let i = 0; i < n; i++) {
+      all.push(...this.step(1 / 120));
+      if (this.cannonEnabled) this.stepCannon(1 / 120);
+    }
     return all;
   }
 
@@ -455,6 +664,19 @@ export class EngineWorld {
         landedT: b.landedT, sloshM: +b.sloshM.toFixed(3),
       })),
       fluids: this.fluids.map((f) => ({ name: f.name, surfaceY: f.max.y })),
+    };
+  }
+
+  /** Get physics simulation statistics */
+  getStats(): typeof this.stats & { broadPhaseCells: number; broadPhasePairs: number; collisionChecksThisStep: number; bodiesAsleep: number; cannonBodies: number; stepCount: number } {
+    return {
+      ...this.stats,
+      broadPhaseCells: this.stats.broadPhaseCells,
+      broadPhasePairs: this.stats.broadPhasePairs,
+      collisionChecksThisStep: this.stats.collisionChecksThisStep,
+      bodiesAsleep: this.stats.bodiesAsleep,
+      cannonBodies: this.stats.cannonBodies,
+      stepCount: this.stats.stepCount,
     };
   }
 }

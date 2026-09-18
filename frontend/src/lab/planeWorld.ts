@@ -300,8 +300,8 @@ export class PlaneWorld {
     this.ground.rotation.x = -Math.PI / 2;
     this.ground.receiveShadow = true;
     this.group.add(this.ground);
-    // Environmental scatter: small rocks and grass tufts for visual richness
-    this.group.add(this.buildScatter());
+    // No decoration: the plane is the world. Rocks/grass/trees would violate
+    // NEOGENESIS_RULES Law 2 (no biomes, no vegetation, no decoration, ever).
     this.group.add(this.fluidGroup);
     this.group.add(this.marker);
     this.group.add(this.rig);
@@ -311,48 +311,6 @@ export class PlaneWorld {
     this.rigLight = new THREE.PointLight(0xff5a00, 0, 30, 2);
     this.group.add(this.rigLight);
     this.group.add(this.particles.points);
-  }
-
-  /** Scattered rocks and grass tufts — instanced for zero per-frame cost. */
-  private buildScatter(): THREE.Group {
-    const g = new THREE.Group();
-    const rockGeo = new THREE.DodecahedronGeometry(0.12, 0);
-    const rockMat = new THREE.MeshStandardMaterial({ color: 0x7a7268, roughness: 0.9, metalness: 0.05 });
-    const rockCount = 180;
-    const rocks = new THREE.InstancedMesh(rockGeo, rockMat, rockCount);
-    rocks.castShadow = true;
-    rocks.receiveShadow = true;
-    const dummy = new THREE.Object3D();
-    for (let i = 0; i < rockCount; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 15 + Math.random() * 120;
-      dummy.position.set(Math.cos(angle) * dist, 0.04 + Math.random() * 0.03, Math.sin(angle) * dist);
-      dummy.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
-      const s = 0.5 + Math.random() * 1.5;
-      dummy.scale.set(s, s * (0.6 + Math.random() * 0.4), s);
-      dummy.updateMatrix();
-      rocks.setMatrixAt(i, dummy.matrix);
-    }
-    rocks.instanceMatrix.needsUpdate = true;
-    g.add(rocks);
-    // Grass tufts: small green cones
-    const grassGeo = new THREE.ConeGeometry(0.04, 0.18, 4);
-    const grassMat = new THREE.MeshStandardMaterial({ color: 0x5a7a3a, roughness: 0.95 });
-    const grassCount = 300;
-    const grass = new THREE.InstancedMesh(grassGeo, grassMat, grassCount);
-    for (let i = 0; i < grassCount; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 8 + Math.random() * 150;
-      dummy.position.set(Math.cos(angle) * dist, 0.08, Math.sin(angle) * dist);
-      dummy.rotation.set(0, Math.random() * Math.PI, (Math.random() - 0.5) * 0.3);
-      const s = 0.7 + Math.random() * 1.2;
-      dummy.scale.set(s, s, s);
-      dummy.updateMatrix();
-      grass.setMatrixAt(i, dummy.matrix);
-    }
-    grass.instanceMatrix.needsUpdate = true;
-    g.add(grass);
-    return g;
   }
 
   /** Celebration / impact particles anyone can trigger (terminal fun commands too). */

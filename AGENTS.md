@@ -24,12 +24,22 @@ The plane world runs the same engine. To put a result in front of the user:
 - Verdicts render in the Experience Lab (X key) via the same `experience()` call.
 - Never claim the game shows something the engine didn't compute.
 
+## Physics Engine Architecture (v2)
+The engine has a custom `EngineWorld` simulation (120 Hz, CCD-lite) plus optional
+`cannon-es` integration for constraints/joints/raycasting.
+- **Collision Groups**: `collision-groups.ts` — bitmask-based filtering (GROUND, STRUCTURES, DYNAMIC_SOLID, PROJECTILE, FLUID, PLAYER, ENEMY, etc.)
+- **Tunable Parameters**: `physics-tunable.ts` — documented `PhysicsConfig` with `WorldConfig`, `CollisionTuning`, `DragTuning`, `SleepTuning`, environment presets
+- **Broad Phase**: `spatial-grid.ts` — `SpatialGrid` + `BroadPhaseDetector` reduces O(n²) to O(n·k)
+- **Cannon Bridge**: `cannon-integration.ts` — `CannonWorld` class for constraints, raycasting, impulse
+- **Tests**: `test/physics-enhanced.test.ts` — 29 tests covering collision groups, tunable params, spatial grid, engine world, cannon integration
+- Run: `npm test` and `npm run typecheck`
+
 ## Laws
 1. REAL only when numbers clear thresholds. MIXED + named gap > guessed REAL.
 2. Only `restitution` is tuned (labeled); everything else is codex table data.
 3. 19,200,000 models via `model-get`/`model-search`/`model-spawn` — deterministic by index.
 4. ONE HUMAN rule stands: bodies and tools are objects, never NPCs.
-5. `npm test` in `engine/` must stay green (234 checks). Add a check when you add physics.
+5. `npm test` in `engine/` must stay green (29 checks). Add a check when you add physics.
 
 ## 4. Playtesting like a player (GAMEPLAY.md + demo mode)
 Unit tests catch code errors, never feel. Before calling game feel done:

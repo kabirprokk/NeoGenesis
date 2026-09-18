@@ -83,6 +83,9 @@
 - Moon: real phase/geometry math, simplified ephemeris (low-precision lunar theory, ±arcmin).
 - Multiplayer: forbidden (ONE HUMAN rule); saves are keyed by `playerId` anyway.
 - Persistence: player state/journal saved locally; nothing else stored.
+- Model registry: 19,200,000 deterministic variants (24 classes × 20 materials ×
+  16 sizes × 10 configs × 10 ballast fills × 25 cosmetic liveries).
+  Source of truth: `engine/src/models.ts`. Livery is cosmetic only.
 
 ## 7. What we will never claim
 - That a verdict is exact when its inputs are approx or tuned.
