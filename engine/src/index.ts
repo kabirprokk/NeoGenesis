@@ -13,3 +13,4 @@ export * from "./collision-groups.js";
 export * from "./physics-tunable.js";
 export * from "./spatial-grid.js";
 export * from "./cannon-integration.js";
+export * from "./cloud-physics.js";

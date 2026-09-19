@@ -31,7 +31,9 @@ The engine has a custom `EngineWorld` simulation (120 Hz, CCD-lite) plus optiona
 - **Tunable Parameters**: `physics-tunable.ts` — documented `PhysicsConfig` with `WorldConfig`, `CollisionTuning`, `DragTuning`, `SleepTuning`, environment presets
 - **Broad Phase**: `spatial-grid.ts` — `SpatialGrid` + `BroadPhaseDetector` reduces O(n²) to O(n·k)
 - **Cannon Bridge**: `cannon-integration.ts` — `CannonWorld` class for constraints, raycasting, impulse
-- **Tests**: `test/physics-enhanced.test.ts` — 29 tests covering collision groups, tunable params, spatial grid, engine world, cannon integration
+- **Cloud Physics**: `cloud-physics.ts` — real-world cloud simulation (9 types: cirrus, cirrocumulus, altocumulus, altostratus, stratus, stratocumulus, cumulus, cumulonimbus, nimbostratus, fog) with wind-driven advection, jet stream, turbulence, precipitation, formation/dissipation, altitude-coupled atmosphere, ice physics
+- **Cloud Rendering**: `frontend/src/three/clouds.ts` + `enhanced-clouds.ts` — physics-driven cloud meshes with type-specific textures, night dimming, rain particle effects
+- **Tests**: `test/physics-enhanced.test.ts` (29 tests) + `test/cloud-physics.test.ts` (24 tests) — 53 total tests covering all physics systems
 - Run: `npm test` and `npm run typecheck`
 
 ## Laws
