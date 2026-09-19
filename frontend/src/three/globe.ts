@@ -82,10 +82,6 @@ export function buildGlobe(scene: THREE.Scene) {
   scene.add(stars);
   // REAL naked-eye planets (JPL elements via planetStates): 7 points, true
   // colors, sized by magnitude. Updated per frame in updateSky.
-  const PLANET_COLORS: Record<string, [number, number, number]> = {
-    Mercury: [0.75, 0.68, 0.6], Venus: [0.98, 0.94, 0.8], Mars: [1.0, 0.45, 0.25],
-    Jupiter: [0.95, 0.85, 0.7], Saturn: [0.9, 0.8, 0.6], Uranus: [0.6, 0.9, 0.9], Neptune: [0.4, 0.55, 1.0],
-  };
   const planetGeo = new THREE.BufferGeometry();
   const pPos = new Float32Array(7 * 3), pCol = new Float32Array(7 * 3);
   planetGeo.setAttribute("position", new THREE.BufferAttribute(pPos, 3));
@@ -147,10 +143,11 @@ export function updateSky(handles: ReturnType<typeof buildGlobe>, dateUtc: Date,
       const s = BRIGHT_STARS[i];
       const hz = equatorialToHorizontal(s.raH, s.decD, dateUtc, lat, lon);
       const altR = (hz.altitudeDeg * Math.PI) / 180, azR = (hz.azimuthDeg * Math.PI) / 180;
-      const dir = new THREE.Vector3(Math.cos(altR) * Math.sin(azR), Math.sin(altR), -Math.cos(altR) * Math.cos(azR));
       // Below-horizon stars park under the ground plane (occluded, depth-tested).
-      const v = hz.altitudeDeg > -1 ? dir.multiplyScalar(Rr) : dir.multiplyScalar(-Rr * 2);
-      arr[i*3] = v.x; arr[i*3+1] = v.y; arr[i*3+2] = v.z;
+      const d = hz.altitudeDeg > -1 ? Rr : -Rr * 2;
+      arr[i*3] = Math.cos(altR) * Math.sin(azR) * d;
+      arr[i*3+1] = Math.sin(altR) * d;
+      arr[i*3+2] = -Math.cos(altR) * Math.cos(azR) * d;
     }
     p.needsUpdate = true;
   }
@@ -168,9 +165,10 @@ export function updateSky(handles: ReturnType<typeof buildGlobe>, dateUtc: Date,
     for (let i = 0; i < states.length; i++) {
       const st = states[i];
       const altR = (st.altitudeDeg * Math.PI) / 180, azR = (st.azimuthDeg * Math.PI) / 180;
-      const dir = new THREE.Vector3(Math.cos(altR) * Math.sin(azR), Math.sin(altR), -Math.cos(altR) * Math.cos(azR));
-      const v = st.altitudeDeg > -1 ? dir.multiplyScalar(Rr) : dir.multiplyScalar(-Rr * 2);
-      arr[i*3] = v.x; arr[i*3+1] = v.y; arr[i*3+2] = v.z;
+      const d = st.altitudeDeg > -1 ? Rr : -Rr * 2;
+      arr[i*3] = Math.cos(altR) * Math.sin(azR) * d;
+      arr[i*3+1] = Math.sin(altR) * d;
+      arr[i*3+2] = -Math.cos(altR) * Math.cos(azR) * d;
       const gain = Math.max(0.25, Math.min(1.3, 1.5 - 0.22 * st.magV));
       const cc = COLORS[st.name] ?? [1, 1, 1];
       carr[i*3] = Math.min(1, cc[0] * gain); carr[i*3+1] = Math.min(1, cc[1] * gain); carr[i*3+2] = Math.min(1, cc[2] * gain);
