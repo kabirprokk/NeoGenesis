@@ -1,5 +1,5 @@
-// Model registry: 19,200,000 deterministic variants
-// (24 classes × 20 materials × 16 sizes × 10 configs × 10 ballast fills ×
+// Model registry: 27,200,000 deterministic variants
+// (34 classes × 20 materials × 16 sizes × 10 configs × 10 ballast fills ×
 // 25 liveries). Nothing stored — every entry derives from its index, so an AI
 // can address any model by id and get identical physics. Lineage: grows out of
 // neo_genesis_model_matrix.json (105 aerospace + maritime variants) into a
@@ -16,6 +16,8 @@ export const MODEL_CLASSES = [
   "tool", "container", "ingot", "shell", "habitat-module", "ballast",
   "wedge-ramp", "dome", "arch", "truss", "capsule", "turbine",
   "tank-vessel", "pipe-run", "dragon", "ufo", "kraken", "buoy",
+  "humanoid", "vehicle", "spaceship", "castle", "house", "sword",
+  "shield", "chair", "table", "robot",
 ] as const;
 const MODEL_MATS = ["steel", "aluminium", "titanium", "oak", "concrete", "glass", "lead", "gold", "copper", "carbonFibre",
   "iron", "bronze", "brass", "silver", "nickel", "granite", "marble", "rubber", "ice", "silicon"] as const;
@@ -26,13 +28,13 @@ const FILLS = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
 /** Cosmetic serials L01–L25: nameplate only, zero physics effect. */
 const LIVERIES = 25;
 
-const N_CLASS = MODEL_CLASSES.length; // 24
+const N_CLASS = MODEL_CLASSES.length; // 34
 const N_MAT = MODEL_MATS.length; // 20
 const N_SIZE = SIZE_M.length; // 16
 const N_CFG = 10;
 const N_FILL = FILLS.length; // 10
 
-export const MODEL_COUNT = N_CLASS * N_MAT * N_SIZE * N_CFG * N_FILL * LIVERIES; // 19,200,000
+export const MODEL_COUNT = N_CLASS * N_MAT * N_SIZE * N_CFG * N_FILL * LIVERIES; // 27,200,000
 
 const SPHERICAL = new Set(["sphere-probe", "ballast", "buoy"]);
 

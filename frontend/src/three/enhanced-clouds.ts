@@ -15,12 +15,19 @@ export interface CloudRenderData {
   temperature: number;
   isPrecipitating: boolean;
   velocity: { x: number; y: number; z: number };
+  // Realistic cloud rendering properties
+  rotationY: number; // degrees rotation around vertical axis
+  deformation: { stretchX: number; stretchZ: number; shear: number }; // Wind shear deformation
+  cloudTopHeight: number; // m
+  cloudBaseHeight: number; // m
+  gustOffset: { x: number; z: number };
+  isEvaporating: boolean;
 }
 
 export interface EnhancedClouds {
   group: THREE.Group;
   cloudMeshes: Map<string, THREE.Group>;
-  tick: (dt: number, nightFactor: number, cloudData: CloudRenderData[]) => void;
+  tick: (dt: number, nightFactor: number, cloudData?: CloudRenderData[]) => void;
   updateClouds: (cloudData: CloudRenderData[]) => void;
   dispose: () => void;
 }
@@ -200,7 +207,7 @@ export function buildEnhancedClouds(scene: THREE.Scene): EnhancedClouds {
   return {
     group,
     cloudMeshes,
-    tick: (dt: number, nightFactor: number, cloudData: CloudRenderData[]) => {
+    tick: (dt: number, nightFactor: number, cloudData: CloudRenderData[] = []) => {
       const activeIds = new Set(cloudData.map((c) => c.id));
       cleanupOldClouds(activeIds);
 
@@ -210,6 +217,21 @@ export function buildEnhancedClouds(scene: THREE.Scene): EnhancedClouds {
         // Apply wind-driven movement (smoothed)
         mesh.position.x += data.velocity.x * dt;
         mesh.position.z += data.velocity.z * dt;
+
+        // Apply gust offset for realistic wind variability
+        mesh.position.x += data.gustOffset.x * dt;
+        mesh.position.z += data.gustOffset.z * dt;
+
+        // Apply rotation based on wind shear
+        if (data.rotationY !== 0) {
+          mesh.rotation.y = (data.rotationY * Math.PI) / 180;
+        }
+
+        // Apply wind shear deformation to scale
+        const stretchX = 1 + data.deformation.shear * 0.1;
+        const stretchZ = 1 + data.deformation.shear * 0.05;
+        const currentW = Math.max(1, data.size.width * stretchX);
+        const currentD = Math.max(1, data.size.depth * stretchZ);
 
         // Wrap around at world boundaries
         const wrapRadius = 50000;
@@ -224,7 +246,6 @@ export function buildEnhancedClouds(scene: THREE.Scene): EnhancedClouds {
           const mat = sprite.material as THREE.SpriteMaterial;
           const nightOpacity = data.density * (1 - nightFactor * 0.7);
           mat.opacity = nightOpacity;
-          // Shift color toward blue-gray at night
           const dayColor = new THREE.Color(0xffffff);
           const nightColor = new THREE.Color(0x2a3648);
           mat.color.copy(dayColor.lerp(nightColor, nightFactor));
@@ -244,6 +265,15 @@ export function buildEnhancedClouds(scene: THREE.Scene): EnhancedClouds {
             }
           }
           points.geometry.attributes.position.needsUpdate = true;
+        }
+
+        // Evaporation effect (density reduction)
+        if (data.isEvaporating) {
+          const sprite2 = mesh.children[0] as THREE.Sprite;
+          if (sprite2) {
+            const mat2 = sprite2.material as THREE.SpriteMaterial;
+            mat2.opacity = Math.max(0, mat2.opacity * 0.98);
+          }
         }
       }
     },

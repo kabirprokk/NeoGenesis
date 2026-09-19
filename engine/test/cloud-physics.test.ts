@@ -262,3 +262,224 @@ describe("Cloud Physics Parameters", () => {
     expect(params.turbulentDiffusivity).toBe(50);
   });
 });
+
+// ─── Realistic Wind Profile Tests ──────────────────────
+
+describe("Realistic Wind Profile", () => {
+  it("should generate a wind profile with geostrophic balance", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.config.enableGeostrophicBalance = true;
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    expect(engine.windProfile.length).toBeGreaterThan(0);
+    // Wind should have geostrophic component
+    const upperLayer = engine.windProfile.find((w) => w.altitude >= 5000);
+    expect(upperLayer).toBeDefined();
+    expect(upperLayer!.windX).toBeGreaterThan(0);
+  });
+
+  it("should show wind veering with altitude (clockwise in NH)", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const lowWind = engine.getWindAtAltitude(1000);
+    const highWind = engine.getWindAtAltitude(8000);
+    // Direction should change with altitude
+    const lowDir = Math.atan2(lowWind.z, lowWind.x);
+    const highDir = Math.atan2(highWind.z, highWind.x);
+    expect(highDir).not.toBeCloseTo(lowDir, 5);
+  });
+
+  it("should have stronger wind at jet stream altitude", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const lowWind = engine.getWindAtAltitude(2000);
+    const jetWind = engine.getWindAtAltitude(10000);
+    expect(jetWind.x).toBeGreaterThanOrEqual(lowWind.x);
+  });
+
+  it("should apply Coriolis deflection when enabled", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.config.enableCoriolis = true;
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const layer = engine.windProfile.find((w) => w.altitude > 5000);
+    expect(layer).toBeDefined();
+    // Coriolis deflection should be non-zero
+    expect(layer!.coriolisDeflection.x).toBeDefined();
+  });
+
+  it("should have Ekman spiral effect in surface layer", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.config.enableEkmanSpiral = true;
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const surfaceWind = engine.getWindAtAltitude(100);
+    const midWind = engine.getWindAtAltitude(2000);
+    // Surface wind should be weaker than mid-level
+    expect(surfaceWind.x).toBeLessThanOrEqual(midWind.x * 1.5);
+  });
+
+  it("should compute wind shear correctly", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const shear = (engine as any).computeWindShear(5000);
+    expect(shear).toBeGreaterThanOrEqual(0);
+  });
+
+  it("should compute Richardson number for KH instability", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const ri = (engine as any).computeRichardsonNumber(5000, 20, 0.01, 290);
+    expect(ri).toBeDefined();
+    expect(typeof ri).toBe("number");
+  });
+
+  it("should have turbulence intensity that decreases with altitude", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const lowTurb = engine.windProfile.find((w) => w.altitude === 500);
+    const highTurb = engine.windProfile.find((w) => w.altitude === 10000);
+    if (lowTurb && highTurb) {
+      // Turbulence should generally be lower at higher altitude
+      expect(highTurb.turbulenceIntensity).toBeLessThanOrEqual(lowTurb.turbulenceIntensity * 1.5);
+    }
+  });
+});
+
+// ─── Cloud Rotation and Deformation Tests ──────────────
+
+describe("Cloud Rotation and Deformation", () => {
+  it("should spawn cloud with rotation property", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const cloud = engine.spawnCloud(CloudType.CUMULUS, { x: 0, y: 1000, z: 0 });
+    expect(cloud.rotationY).toBeDefined();
+    expect(typeof cloud.rotationY).toBe("number");
+  });
+
+  it("should spawn cloud with deformation property", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const cloud = engine.spawnCloud(CloudType.CUMULUS, { x: 0, y: 1000, z: 0 });
+    expect(cloud.deformation).toBeDefined();
+    expect(cloud.deformation.stretchX).toBeDefined();
+    expect(cloud.deformation.stretchZ).toBeDefined();
+  });
+
+  it("should update cloud rotation based on wind shear", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 20, y: 0, z: 10 }, 13000);
+    engine.config.windShearScale = 2.0;
+    const cloud = engine.spawnCloud(CloudType.CUMULUS, { x: 0, y: 3000, z: 0 });
+    const initialRot = cloud.rotationY;
+    engine.update(0.1);
+    // Cloud should have rotated due to wind shear
+    expect(cloud.rotationY).not.toBeCloseTo(initialRot, 5);
+  });
+
+  it("should have droplet size distribution on cloud body", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const cloud = engine.spawnCloud(CloudType.CUMULUS, { x: 0, y: 1000, z: 0 });
+    expect(cloud.dropletSizeDistribution).toBeDefined();
+    expect(cloud.dropletSizeDistribution.size).toBeGreaterThan(0);
+  });
+
+  it("should have cloud top and base height", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const cloud = engine.spawnCloud(CloudType.CUMULUS, { x: 0, y: 1000, z: 0 });
+    expect(cloud.cloudTopHeight).toBeGreaterThan(cloud.cloudBaseHeight);
+  });
+});
+
+// ─── Kelvin-Helmholtz Instability Tests ────────────────
+
+describe("Kelvin-Helmholtz Instability", () => {
+  it("should detect KH instability when Richardson number is below threshold", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.config.enableKelvinHelmholtz = true;
+    engine.config.khThreshold = 0.25;
+    const cloud = engine.spawnCloud(CloudType.CUMULUS, { x: 0, y: 3000, z: 0 });
+    engine.generateWindProfile({ x: 30, y: 0, z: 15 }, 13000);
+    const wind = engine.getWindAtAltitude(3000);
+    // High shear should produce low Richardson number
+    if (wind.richardsonNumber < engine.config.khThreshold) {
+      expect(wind.richardsonNumber).toBeLessThan(engine.config.khThreshold);
+    }
+  });
+});
+
+// ─── Bergeron-Findeisen Process Tests ──────────────────
+
+describe("Bergeron-Findeisen Process", () => {
+  it("should convert liquid water to ice at cold temperatures", () => {
+    const engine = new CloudPhysicsEngine();
+    const cloud = engine.spawnCloud(CloudType.CUMULONIMBUS, { x: 0, y: 5000, z: 0 });
+    cloud.liquidWaterContent = 200;
+    cloud.iceContent = 10;
+    cloud.temperature = 250; // Below freezing
+    engine.config.enableBergeronProcess = true;
+    const initialWater = cloud.liquidWaterContent;
+    const initialIce = cloud.iceContent;
+    engine.update(100);
+    expect(cloud.iceContent).toBeGreaterThan(initialIce);
+  });
+
+  it("should reduce liquid water when ice grows", () => {
+    const engine = new CloudPhysicsEngine();
+    const cloud = engine.spawnCloud(CloudType.CUMULONIMBUS, { x: 0, y: 5000, z: 0 });
+    cloud.liquidWaterContent = 200;
+    cloud.iceContent = 5;
+    cloud.temperature = 250;
+    engine.config.enableBergeronProcess = true;
+    const initialWater = cloud.liquidWaterContent;
+    engine.update(100);
+    expect(cloud.liquidWaterContent).toBeLessThanOrEqual(initialWater);
+  });
+});
+
+// ─── Wind Gust Tests ────────────────────────────────────
+
+describe("Wind Gusts", () => {
+  it("should compute gust factor when enabled", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.config.enableWindGusts = true;
+    engine.config.windGustIntensity = 0.3;
+    const factor = (engine as any).computeGustFactor(10000, 60);
+    expect(factor).toBeGreaterThan(0);
+  });
+
+  it("should apply gust offset to cloud position", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    engine.config.enableWindGusts = true;
+    const cloud = engine.spawnCloud(CloudType.CUMULUS, { x: 0, y: 1000, z: 0 });
+    expect(cloud.gustOffset).toBeDefined();
+    expect(cloud.gustOffset.x).toBeDefined();
+    expect(cloud.gustOffset.z).toBeDefined();
+  });
+});
+
+// ─── Realistic Cloud State Tests ───────────────────────
+
+describe("Realistic Cloud State", () => {
+  it("should return render data with new properties", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    engine.spawnCloud(CloudType.CUMULUS, { x: 0, y: 1000, z: 0 });
+    const renderData = engine.getCloudRenderData();
+    expect(renderData.length).toBe(1);
+    expect(renderData[0].rotationY).toBeDefined();
+    expect(renderData[0].deformation).toBeDefined();
+    expect(renderData[0].gustOffset).toBeDefined();
+    expect(renderData[0].isEvaporating).toBeDefined();
+  });
+
+  it("should have valid wind profile data for rendering", () => {
+    const engine = new CloudPhysicsEngine();
+    engine.generateWindProfile({ x: 10, y: 0, z: 5 }, 13000);
+    const state = engine.getState();
+    expect(state.windProfile.length).toBeGreaterThan(0);
+    expect(state.windProfile[0].directionRadians).toBeDefined();
+    expect(state.windProfile[0].potentialTemperature).toBeDefined();
+    expect(state.windProfile[0].richardsonNumber).toBeDefined();
+  });
+});

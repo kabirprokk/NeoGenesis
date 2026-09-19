@@ -251,6 +251,73 @@ export const DEFAULT_SLEEP_TUNING: SleepTuning = {
   maxSleepingBodies: 400,
 };
 
+/** Cloud and atmosphere simulation tuning */
+export interface CloudTuning {
+  /** Enable Coriolis effect on wind direction */
+  enableCoriolis: boolean;
+  /** Coriolis parameter (f = 2Ω sin(φ)) */
+  coriolisParameter: number;
+  /** Enable Ekman spiral for surface wind */
+  enableEkmanSpiral: boolean;
+  /** Surface friction coefficient (m/s) */
+  surfaceFrictionCoeff: number;
+  /** Enable geostrophic wind balance */
+  enableGeostrophicBalance: boolean;
+  /** Pressure gradient force magnitude (Pa/m) */
+  pressureGradientForce: number;
+  /** Jet stream strength multiplier */
+  jetStreamStrength: number;
+  /** Jet stream altitude range (m) */
+  jetStreamAltitudeMin: number;
+  jetStreamAltitudeMax: number;
+  /** Enable wind gusts */
+  enableWindGusts: boolean;
+  /** Wind gust intensity multiplier */
+  windGustIntensity: number;
+  /** Gust correlation time (seconds) */
+  gustCorrelationTime: number;
+  /** Enable Kelvin-Helmholtz instability */
+  enableKelvinHelmholtz: boolean;
+  /** KH instability Richardson number threshold */
+  khThreshold: number;
+  /** Cloud turbulence model (k-epsilon vs k-omega) */
+  turbulenceModel: string;
+  /** Eddy viscosity scale factor */
+  eddyViscosityScale: number;
+  /** Enable Marshall-Palmer drop size distribution */
+  enableDropSizeDistribution: boolean;
+  /** Enable Bergeron-Findeisen ice crystal growth */
+  enableBergeronProcess: boolean;
+  /** Cloud condensation nuclei concentration (cm⁻³) */
+  ccnc: number;
+  /** Ice nucleation temperature threshold (K) */
+  iceNucleationTemp: number;
+}
+
+/** Default cloud tuning */
+export const DEFAULT_CLOUD_TUNING: CloudTuning = {
+  enableCoriolis: true,
+  coriolisParameter: 1.0e-4,
+  enableEkmanSpiral: true,
+  surfaceFrictionCoeff: 0.2,
+  enableGeostrophicBalance: true,
+  pressureGradientForce: 0.001,
+  jetStreamStrength: 1.0,
+  jetStreamAltitudeMin: 8000,
+  jetStreamAltitudeMax: 12000,
+  enableWindGusts: true,
+  windGustIntensity: 0.3,
+  gustCorrelationTime: 60,
+  enableKelvinHelmholtz: true,
+  khThreshold: 0.25,
+  turbulenceModel: "k-epsilon",
+  eddyViscosityScale: 1.0,
+  enableDropSizeDistribution: true,
+  enableBergeronProcess: true,
+  ccnc: 300, // cm⁻³ (clean maritime air)
+  iceNucleationTemp: 253.15, // K (-20°C)
+};
+
 /** Combined physics configuration — all tuning in one place */
 export interface PhysicsConfig {
   world: WorldConfig;
@@ -261,6 +328,7 @@ export interface PhysicsConfig {
   fluid: FluidTuning;
   structural: StructuralTuning;
   sleep: SleepTuning;
+  cloud: CloudTuning;
 }
 
 /** Complete default physics configuration */
@@ -273,6 +341,7 @@ export const DEFAULT_PHYSICS_CONFIG: PhysicsConfig = {
   fluid: DEFAULT_FLUID_TUNING,
   structural: DEFAULT_STRUCTURAL_TUNING,
   sleep: DEFAULT_SLEEP_TUNING,
+  cloud: DEFAULT_CLOUD_TUNING,
 };
 
 /** Deep-partial: environment presets override nested tuning field-by-field. */

@@ -8,6 +8,7 @@
 import * as THREE from "three";
 import { MATERIALS, type EngineWorld, type FluidBox } from "../../../engine/src/index.js";
 import { modelGeometry } from "../three/geometries.js";
+import { extendedModelGeometry } from "../three/extended-geometries.js";
 
 /** Per-material render truth: metals shine, minerals stay matte. */
 const MATERIAL_VISUAL: Record<string, { metalness: number; roughness: number; opacity?: number; envMapIntensity?: number }> = {
@@ -349,7 +350,8 @@ export class PlaneWorld {
         });
         if (v.opacity !== undefined) { mat.transparent = true; mat.opacity = v.opacity; }
         // Class-specific geometry: each model class gets a distinctive 3D shape.
-        const classGeo = b.modelClass ? modelGeometry(b.modelClass, b.radiusM) : null;
+        let classGeo = b.modelClass ? modelGeometry(b.modelClass, b.radiusM) : null;
+        if (!classGeo && b.modelClass) classGeo = extendedModelGeometry(b.modelClass, b.radiusM);
         if (classGeo) {
           m = new THREE.Mesh(classGeo, mat);
         } else if (b.shape === "sphere") {

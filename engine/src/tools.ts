@@ -10,6 +10,7 @@ import { experience, runScenario, verdictCSV } from "./experience.js";
 import { neoParse, neoScenario, neoSamples, neoPatternCount, neoToolFor } from "./neo.js";
 import { terminalVelocity, projectileRange, impact, buoyancyVerdict, soundDelay, lightDelay, solarIlluminanceLux, sunColorTempK, kelvinToRGBapprox, slidesOnIncline, reposeOk, heatEnergyJ, heatTimeS, lorentz, relKineticJ, orbitVelocity, escapeVelocity, orbitPeriodS, horizonM, soundSpeed, gravityAt, blackbodyFlux } from "./physics.js";
 import { SPECIFIC_HEAT, UNCERTAINTY, H_CONV, CITATIONS, EMISSIVITY, altitudeDensity } from "./science.js";
+import { jeansMassMsun, freeFallTimeS, starFate, starLifetimeYr, starLuminosityLsun, habitableZoneAU, starFormVerdict } from "./star-formation.js";
 import { CODEX_VERSION } from "./constants.js";
 
 export type Args = Record<string, string | number | boolean>;
@@ -155,6 +156,19 @@ export const TOOLS: ToolDef[] = [
     }),
   def("blackbody", "Radiative flux σT⁴ (W/m²) at a surface temperature.", T(["tempC"], [["tempC", "number", "°C"]]),
     (a) => ({ fluxWm2: +blackbodyFlux(num(a, "tempC")).toFixed(0) })),
+  def("star-form", "Real star-formation verdict: Jeans collapse + free-fall + fate + lifetime. Lab gravity unchanged (plane-coupled).", T([], [["massMsun", "number", "cloud/star mass in suns"], ["tempK", "number", "cloud temp K, default 10"], ["density", "number", "number density cm⁻³, default 1e4"]]),
+    (a) => starFormVerdict(num(a, "massMsun", 10), num(a, "tempK", 10), num(a, "density", 1e4))),
+  def("star-fate", "Final fate by initial mass (brown dwarf → black hole).", T(["massMsun"], [["massMsun", "number", "initial mass in suns"]]),
+    (a) => {
+      const m = num(a, "massMsun", 1);
+      const f = starFate(m);
+      return { massMsun: m, fate: f.fate, remnant: f.remnant, luminosityLsun: +starLuminosityLsun(m).toFixed(3), lifetimeYr: starLifetimeYr(m), hzAU: habitableZoneAU(starLuminosityLsun(m)).map((v) => +v.toFixed(2)) };
+    }),
+  def("collapse-time", "Free-fall time of a cloud density (Myr) + Jeans mass at 10K.", T(["density"], [["density", "number", "number density cm⁻³"]]),
+    (a) => {
+      const n = num(a, "density", 1e4);
+      return { densityCm3: n, freeFallMyr: +(freeFallTimeS(n) / (365.25 * 24 * 3600 * 1e6)).toFixed(3), jeansMsunAt10K: +jeansMassMsun(10, n).toFixed(2) };
+    }),
   def("emissivity-table", "Surface emissivities for radiation heat transfer.", T([], []),
     () => Object.values(EMISSIVITY).map((e) => ({ id: e.id, emissivity: e.e }))),
   def("sound-through", "Ultrasonic transit time + impedance through a material slab.", T(["material", "thicknessM"], [["material", "string", "material id"], ["thicknessM", "number", "slab thickness m"]]),

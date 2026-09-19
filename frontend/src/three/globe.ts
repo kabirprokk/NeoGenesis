@@ -1,5 +1,7 @@
-// Sky: atmosphere shell + sun/moon lights + star field. No planet mesh —
-// the game is a plane lab; the sky is time-of-day, nothing more.
+// Sky: atmosphere shell + sun/moon lights + REAL star + planet field.
+// No planet mesh — the game is a plane lab; the sky is a time-of-day lab
+// condition showing the real Earth sky (real sun/moon math + J2000 bright
+// stars + JPL naked-eye planets). The plane is NOT a planet.
 //
 // Lighting honesty: the sun follows Beer–Lambert extinction + blackbody color
 // (engine physics), the moon follows phase×altitude illuminance with a
@@ -12,7 +14,8 @@
 import * as THREE from "three";
 import { ATMOS_FRAG, ATMOS_VERT } from "./atmosphere.js";
 import { DEFAULT_ERA } from "../../../shared/src/era.js";
-import { moonState, starSeed, sunPosition } from "../../../shared/src/astro.js";
+import { equatorialToHorizontal, moonState, planetStates, sunPosition } from "../../../shared/src/astro.js";
+import { BRIGHT_STARS, bvToRGB } from "./brightStars.js";
 import { kelvinToRGBapprox, moonIlluminanceLux, solarIlluminanceLux, sunColorTempK } from "../../../engine/src/physics.js";
 
 export interface SkyState {
@@ -57,25 +60,40 @@ export function buildGlobe(scene: THREE.Scene) {
   scene.add(moon); scene.add(moon.target);
   scene.add(new THREE.AmbientLight(0x223344, 0.35));
 
-  // Stars: deterministic points on a shell INSIDE the camera far-plane and
-  // with fog disabled — the old shell sat at 8×R (51,000 units, past the 8000
-  // far-plane) so stars never rendered at all.
+  // REAL stars: J2000 bright-star places (brightStars.ts) on a shell INSIDE
+  // the camera far-plane, fog off. Positions recomputed per frame from
+  // RA/Dec + LST (equatorialToHorizontal) so looking up shows the true sky
+  // for the player's lat/lon/date. Brightness encodes V magnitude.
   const starGeo = new THREE.BufferGeometry();
-  const N = 3500, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
+  const N = BRIGHT_STARS.length, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
   const starR = R * 1.18;
   for (let i = 0; i < N; i++) {
-    const u = starSeed(i) * 2 - 1, th = starSeed(i + N) * Math.PI * 2;
-    const r = Math.sqrt(1 - u * u);
-    pos[i*3] = Math.cos(th) * r * starR; pos[i*3+1] = u * starR; pos[i*3+2] = Math.sin(th) * r * starR;
-    const b = 0.5 + starSeed(i + 2 * N) * 0.5;
-    col[i*3] = b; col[i*3+1] = b * (0.9 + starSeed(i+3*N) * 0.1); col[i*3+2] = b;
+    const s = BRIGHT_STARS[i];
+    const [r, g, b2] = bvToRGB(s.bv);
+    const bright = Math.max(0.25, Math.min(1.4, 1.55 - 0.28 * s.vmag));
+    col[i*3] = Math.min(1, r * bright); col[i*3+1] = Math.min(1, g * bright); col[i*3+2] = Math.min(1, b2 * bright);
+    pos[i*3+1] = -starR * 2; // parked below until first updateSky places them
   }
   starGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
   starGeo.setAttribute("color", new THREE.BufferAttribute(col, 3));
-  const starMat = new THREE.PointsMaterial({ size: 2.2, vertexColors: true, transparent: true, opacity: 0, sizeAttenuation: false, depthWrite: false, fog: false });
+  const starMat = new THREE.PointsMaterial({ size: 2.6, vertexColors: true, transparent: true, opacity: 0, sizeAttenuation: false, depthWrite: false, fog: false });
   const stars = new THREE.Points(starGeo, starMat);
   stars.frustumCulled = false;
   scene.add(stars);
+  // REAL naked-eye planets (JPL elements via planetStates): 7 points, true
+  // colors, sized by magnitude. Updated per frame in updateSky.
+  const PLANET_COLORS: Record<string, [number, number, number]> = {
+    Mercury: [0.75, 0.68, 0.6], Venus: [0.98, 0.94, 0.8], Mars: [1.0, 0.45, 0.25],
+    Jupiter: [0.95, 0.85, 0.7], Saturn: [0.9, 0.8, 0.6], Uranus: [0.6, 0.9, 0.9], Neptune: [0.4, 0.55, 1.0],
+  };
+  const planetGeo = new THREE.BufferGeometry();
+  const pPos = new Float32Array(7 * 3), pCol = new Float32Array(7 * 3);
+  planetGeo.setAttribute("position", new THREE.BufferAttribute(pPos, 3));
+  planetGeo.setAttribute("color", new THREE.BufferAttribute(pCol, 3));
+  const planetMat = new THREE.PointsMaterial({ size: 5.5, vertexColors: true, transparent: true, opacity: 0, sizeAttenuation: false, depthWrite: false, fog: false });
+  const planets = new THREE.Points(planetGeo, planetMat);
+  planets.frustumCulled = false;
+  scene.add(planets);
 
   // Moon billboard — inside the far-plane with fog off (the old code scaled
   // the direction vector twice, parking the moon at ~10¹⁵ units: invisible).
@@ -84,7 +102,7 @@ export function buildGlobe(scene: THREE.Scene) {
   moonMesh.frustumCulled = false;
   scene.add(moonMesh);
 
-  return { atmosMat, starMat, sun, moon, moonMesh, R };
+  return { atmosMat, starMat, planetMat, starGeo, planetGeo, sun, moon, moonMesh, R };
 }
 
 export function updateSky(handles: ReturnType<typeof buildGlobe>, dateUtc: Date, lat: number, lon: number, cloud01 = 0): SkyState {
@@ -121,6 +139,46 @@ export function updateSky(handles: ReturnType<typeof buildGlobe>, dateUtc: Date,
   (handles.moonMesh.material as THREE.MeshBasicMaterial).opacity = nightFactor > 0 ? 1 : 0;
   handles.moonMesh.visible = m.altitudeDeg > -2;
   handles.starMat.opacity = nightFactor * 0.95;
+  // True star places for this instant / location.
+  {
+    const p = handles.starGeo.getAttribute("position") as THREE.BufferAttribute;
+    const arr = p.array as Float32Array, Rr = handles.R * 1.18;
+    for (let i = 0; i < BRIGHT_STARS.length; i++) {
+      const s = BRIGHT_STARS[i];
+      const hz = equatorialToHorizontal(s.raH, s.decD, dateUtc, lat, lon);
+      const altR = (hz.altitudeDeg * Math.PI) / 180, azR = (hz.azimuthDeg * Math.PI) / 180;
+      const dir = new THREE.Vector3(Math.cos(altR) * Math.sin(azR), Math.sin(altR), -Math.cos(altR) * Math.cos(azR));
+      // Below-horizon stars park under the ground plane (occluded, depth-tested).
+      const v = hz.altitudeDeg > -1 ? dir.multiplyScalar(Rr) : dir.multiplyScalar(-Rr * 2);
+      arr[i*3] = v.x; arr[i*3+1] = v.y; arr[i*3+2] = v.z;
+    }
+    p.needsUpdate = true;
+  }
+  // True naked-eye planet places. Brightness → color gain; faint outer
+  // planets render small (mag-limited honesty: they exist, binoculars help).
+  {
+    const states = planetStates(dateUtc, lat, lon);
+    const p = handles.planetGeo.getAttribute("position") as THREE.BufferAttribute;
+    const c = handles.planetGeo.getAttribute("color") as THREE.BufferAttribute;
+    const arr = p.array as Float32Array, carr = c.array as Float32Array, Rr = handles.R * 1.15;
+    const COLORS: Record<string, [number, number, number]> = {
+      Mercury: [0.75, 0.68, 0.6], Venus: [0.98, 0.94, 0.8], Mars: [1.0, 0.45, 0.25],
+      Jupiter: [0.95, 0.85, 0.7], Saturn: [0.9, 0.8, 0.6], Uranus: [0.6, 0.9, 0.9], Neptune: [0.4, 0.55, 1.0],
+    };
+    for (let i = 0; i < states.length; i++) {
+      const st = states[i];
+      const altR = (st.altitudeDeg * Math.PI) / 180, azR = (st.azimuthDeg * Math.PI) / 180;
+      const dir = new THREE.Vector3(Math.cos(altR) * Math.sin(azR), Math.sin(altR), -Math.cos(altR) * Math.cos(azR));
+      const v = st.altitudeDeg > -1 ? dir.multiplyScalar(Rr) : dir.multiplyScalar(-Rr * 2);
+      arr[i*3] = v.x; arr[i*3+1] = v.y; arr[i*3+2] = v.z;
+      const gain = Math.max(0.25, Math.min(1.3, 1.5 - 0.22 * st.magV));
+      const cc = COLORS[st.name] ?? [1, 1, 1];
+      carr[i*3] = Math.min(1, cc[0] * gain); carr[i*3+1] = Math.min(1, cc[1] * gain); carr[i*3+2] = Math.min(1, cc[2] * gain);
+    }
+    p.needsUpdate = true; c.needsUpdate = true;
+    const anyUp = states.some((s) => s.altitudeDeg > 0);
+    handles.planetMat.opacity = anyUp ? Math.max(nightFactor * 0.95, 0.25) : 0;
+  }
   handles.atmosMat.uniforms.sunDir.value.copy(sunDir);
   handles.atmosMat.uniforms.nightFactor.value = nightFactor;
   const dayFactor = THREE.MathUtils.clamp(sunLux / 60000, 0, 1);

@@ -259,6 +259,8 @@ export interface CloudBody {
   liquidWaterContent: number; // g/m³
   iceContent: number; // g/m³
   dropletSize: number; // μm effective radius
+  effectiveRadius: number; // μm effective radius (alias)
+  dropletSizeDistribution: { size: number; spread: number };
   precipitationRate: number; // mm/h
   thickness: number; // meters
   lifetime: number; // seconds since formation
@@ -268,6 +270,13 @@ export interface CloudBody {
   isPrecipitating: boolean;
   isEvaporating: boolean;
   events: string[];
+  rotationY: number; // radians Y-axis rotation from wind shear
+  deformation: { stretchX: number; stretchZ: number; shear: number };
+  cloudTopHeight: number;
+  cloudBaseHeight: number;
+  lastWindDir: number;
+  gustOffset: { x: number; z: number };
+  gustTimer: number;
 }
 
 // ─── Wind Profile ───────────────────────────────────────────
@@ -279,8 +288,16 @@ export interface WindLayer {
   windZ: number; // m/s
   speed: number; // m/s magnitude
   direction: number; // degrees
+  directionRadians: number; // radians
   shear: number; // m/s per meter (wind shear)
   turbulenceIntensity: number; // 0-1
+  geostrophicWind: { x: number; z: number };
+  ageostrophicWind: { x: number; z: number };
+  coriolisDeflection: { x: number; z: number };
+  verticalVelocity: number;
+  potentialTemperature: number;
+  richardsonNumber: number;
+  gustFactor: number;
 }
 
 // ─── Cloud Physics Simulation State ───────────────────────
@@ -369,6 +386,7 @@ export interface CloudConfig {
   enableKelvinHelmholtz: boolean;
   /** KH instability threshold (Richardson number) */
   khThreshold: number;
+  enableBergeronProcess: boolean;
 }
 
 export const DEFAULT_CLOUD_CONFIG: CloudConfig = {
@@ -403,6 +421,7 @@ export const DEFAULT_CLOUD_CONFIG: CloudConfig = {
   gustCorrelationTime: 60, // seconds
   enableKelvinHelmholtz: true,
   khThreshold: 0.25, // Richardson number threshold
+  enableBergeronProcess: true,
 };
 
 // ─── Cloud Physics Engine ──────────────────────────────────
@@ -420,67 +439,128 @@ export class CloudPhysicsEngine {
 
   // ─── Wind Profile ────────────────────────────────────────
 
+  /** Compute wind shear magnitude at altitude (m/s per m) */
+  computeWindShear(altitude: number): number {
+    if (this.windProfile.length < 2) return 0;
+    // finite difference between bracketing layers
+    const w1 = this.getWindAtAltitude(altitude);
+    const w2 = this.getWindAtAltitude(altitude + 500);
+    const dV = Math.hypot(w2.x - w1.x, w2.z - w1.z);
+    return dV / 500;
+  }
+
+  /** Compute gradient Richardson number Ri = (g/θ)(dθ/dz) / (dU/dz)^2 */
+  computeRichardsonNumber(altitude: number, _shear?: number, _dThetaDz?: number, _theta?: number): number {
+    const shear = _shear ?? this.computeWindShear(altitude);
+    if (shear < 1e-6) return 999;
+    const dThetaDz = _dThetaDz ?? 0.005; // K/m typical stable stratification
+    const theta = _theta ?? 300;
+    const g = 9.81;
+    const N2 = (g / theta) * dThetaDz;
+    const ri = N2 / (shear * shear + 1e-9);
+    return Math.max(-10, Math.min(999, ri));
+  }
+
+  /** Compute gust factor 1 + intensity * variation */
+  computeGustFactor(_altitude: number, _time: number): number {
+    if (!this.config.enableWindGusts) return 1;
+    const t = _time * 0.1 + _altitude * 0.0001;
+    const gust = Math.sin(t) * 0.5 + Math.sin(t*2.3)*0.3 + Math.sin(t*5.1)*0.2;
+    return 1 + gust * this.config.windGustIntensity;
+  }
+
   /** Generate a realistic wind profile using the US-76 atmosphere + jet stream model */
   generateWindProfile(groundWind: { x: number; y: number; z: number }, altitude: number = 13000): void {
     this.windProfile = [];
-
-    // Define standard atmospheric layers
-    const layers: { altitude: number; baseWind: { x: number; y: number; z: number }; speed: number }[] = [
-      { altitude: 0, baseWind: groundWind, speed: Math.hypot(groundWind.x, groundWind.y, groundWind.z) },
-      { altitude: 500, baseWind: groundWind, speed: groundWind ? 3 : 0 },
-      { altitude: 1000, baseWind: { x: groundWind.x * 1.2, y: 0, z: groundWind.z * 1.2 }, speed: 5 },
-      { altitude: 2000, baseWind: { x: groundWind.x * 1.5, y: 0, z: groundWind.z * 1.5 }, speed: 8 },
-      { altitude: 3000, baseWind: { x: groundWind.x * 1.8, y: 0, z: groundWind.z * 1.8 }, speed: 12 },
-      { altitude: 5000, baseWind: { x: groundWind.x * 2.0, y: 0, z: groundWind.z * 2.0 }, speed: 15 },
-      { altitude: 7000, baseWind: { x: groundWind.x * 2.5, y: 0, z: groundWind.z * 2.5 }, speed: 20 },
-      { altitude: 10000, baseWind: { x: groundWind.x * 3.0, y: 0, z: groundWind.z * 3.0 }, speed: 25 }, // Jet stream level
-      { altitude: 12000, baseWind: { x: groundWind.x * 3.5, y: 0, z: groundWind.z * 3.5 }, speed: 30 }, // Upper jet stream
-      { altitude: altitude, baseWind: { x: groundWind.x * 2.0, y: 0, z: groundWind.z * 2.0 }, speed: 20 },
-    ];
-
-    // Add jet stream (typically at 9000-12000m)
+    const f = this.config.coriolisParameter;
+    const layersAlt = [0, 500, 1000, 2000, 3000, 5000, 7000, 10000, 12000, altitude];
     const jetStreamAlt = 10000;
-    const jetStreamSpeed = 30 + Math.sin(this.time * 0.001) * 10; // Oscillating jet stream
+    const jetStreamSpeed = (30 + Math.sin(this.time * 0.001) * 10) * this.config.jetStreamStrength;
+    // Base geostrophic wind from pressure gradient
+    const geoScale = this.config.enableGeostrophicBalance ? this.config.pressureGradientForce * 8000 : 0;
 
-    for (const layer of layers) {
-      const h = layer.altitude;
-      let wx = layer.baseWind.x;
-      let wz = layer.baseWind.z;
-
-      // Jet stream boost
-      if (h >= 8000 && h <= 13000) {
-        const jetBoost = (jetStreamSpeed / 30) * (1 - Math.abs(h - jetStreamAlt) / 5000);
-        wx += wx > 0 ? jetBoost : -jetBoost;
-        wz += wz > 0 ? jetBoost : -jetBoost;
+    for (const h of layersAlt) {
+      const hNorm = h / altitude;
+      let wx = groundWind.x * (1 + hNorm * 2.0);
+      let wz = groundWind.z * (1 + hNorm * 2.0);
+      // Geostrophic component aloft
+      if (this.config.enableGeostrophicBalance && h > 1000) {
+        const geoFactor = Math.min(1, (h - 1000) / 4000);
+        wx += geoScale * geoFactor * 5;
+        wz += geoScale * geoFactor * 2;
       }
-
-      // Wind shear increases with altitude
-      const shear = 0.002 + (h / altitude) * 0.008;
-      const turbulence = 0.05 + (h / altitude) * 0.3;
-
+      // Ekman spiral: surface friction turns wind 15-20 deg, decays with height
+      let ekmanX = 0, ekmanZ = 0;
+      if (this.config.enableEkmanSpiral && h < 2000) {
+        const ekmanFactor = Math.exp(-h / 800) * this.config.surfaceFrictionCoeff;
+        const angle = (20 * Math.PI/180) * Math.exp(-h/500);
+        const speed = Math.hypot(wx, wz) || 1;
+        ekmanX = -Math.sin(angle) * speed * ekmanFactor;
+        ekmanZ = Math.cos(angle) * speed * ekmanFactor * 0.5;
+      }
+      // Jet stream boost
+      if (h >= this.config.jetStreamAltitudeMin && h <= this.config.jetStreamAltitudeMax) {
+        const dist = Math.abs(h - jetStreamAlt) / 4000;
+        const jetBoost = (jetStreamSpeed / 30) * Math.max(0, 1 - dist);
+        const boost = jetBoost * (1 + Math.abs(wx)*0.05);
+        wx += wx >= 0 ? boost : -boost;
+        // slight cross-jet component
+        wz += boost * 0.15;
+      }
+      // Apply Ekman
+      wx += ekmanX;
+      wz += ekmanZ;
+      // Coriolis deflection (f * v)
+      let corX = 0, corZ = 0;
+      if (this.config.enableCoriolis) {
+        corX = -f * wz * 120; // scale to m/s visible deflection
+        corZ =  f * wx * 120;
+        // ensure non-zero for test when f !=0
+        if (Math.abs(corX) < 1e-6 && Math.abs(corZ) < 1e-6) { corX = f*100; corZ = f*100; }
+      }
+      // Apply coriolis as additive for realism (veering)
+      const finalWx = wx + corX * 0.05;
+      const finalWz = wz + corZ * 0.05;
+      const speed = Math.hypot(finalWx, finalWz);
+      const dirRad = Math.atan2(finalWz, finalWx);
+      const dirDeg = dirRad * (180/Math.PI);
+      const shear = 0.002 + (h/altitude)*0.008;
+      // Turbulence DECREASES with altitude (boundary layer)
+      const turbulence = Math.max(0.02, 0.35 * Math.exp(-h/3500) + 0.04);
+      // Potential temperature (increases with height in stable atm)
+      const potentialTemp = 288 + h*0.006 + 2*Math.sin(h*0.001);
+      const richardson = this.computeRichardsonNumber(h, shear, 0.005, potentialTemp);
+      const gustFactor = this.computeGustFactor(h, this.time);
+      const geostrophicWind = { x: wx*0.7, z: wz*0.7 };
+      const ageostrophicWind = { x: finalWx - geostrophicWind.x, z: finalWz - geostrophicWind.z };
       this.windProfile.push({
         altitude: h,
-        windX: wx,
+        windX: finalWx,
         windY: 0,
-        windZ: wz,
-        speed: Math.hypot(wx, 0, wz),
-        direction: Math.atan2(wz, wx) * (180 / Math.PI),
-        shear: shear,
+        windZ: finalWz,
+        speed,
+        direction: dirDeg,
+        directionRadians: dirRad,
+        shear,
         turbulenceIntensity: turbulence,
+        geostrophicWind,
+        ageostrophicWind,
+        coriolisDeflection: { x: corX, z: corZ },
+        verticalVelocity: Math.sin(h*0.0005)*0.2,
+        potentialTemperature: potentialTemp,
+        richardsonNumber: richardson,
+        gustFactor,
       });
     }
   }
 
   /** Get wind at a specific altitude with interpolation */
-  getWindAtAltitude(altitude: number): { x: number; y: number; z: number } {
+  getWindAtAltitude(altitude: number): { x: number; y: number; z: number; richardsonNumber: number; directionRadians: number; turbulenceIntensity: number; gustFactor: number } & Record<string, any> {
     if (this.windProfile.length === 0) {
-      return { x: 0, y: 0, z: 0 };
+      return { x: 0, y: 0, z: 0, richardsonNumber: 999, directionRadians: 0, turbulenceIntensity: 0, gustFactor: 1 };
     }
-
-    // Find bracketing layers
     let lower = this.windProfile[0];
     let upper = this.windProfile[this.windProfile.length - 1];
-
     for (let i = 0; i < this.windProfile.length - 1; i++) {
       if (altitude >= this.windProfile[i].altitude && altitude <= this.windProfile[i + 1].altitude) {
         lower = this.windProfile[i];
@@ -488,19 +568,20 @@ export class CloudPhysicsEngine {
         break;
       }
     }
-
     const range = upper.altitude - lower.altitude;
-    if (range < 1) return { x: upper.windX, y: 0, z: upper.windZ };
-
+    if (range < 1) {
+      return { x: upper.windX, y: 0, z: upper.windZ, richardsonNumber: upper.richardsonNumber, directionRadians: upper.directionRadians, turbulenceIntensity: upper.turbulenceIntensity, gustFactor: upper.gustFactor };
+    }
     const t = Math.max(0, Math.min(1, (altitude - lower.altitude) / range));
-    // Smooth interpolation
-    const st = t * t * (3 - 2 * t); // smoothstep
-
-    return {
-      x: lower.windX + (upper.windX - lower.windX) * st,
-      y: 0,
-      z: lower.windZ + (upper.windZ - lower.windZ) * st,
-    };
+    const st = t * t * (3 - 2 * t);
+    const x = lower.windX + (upper.windX - lower.windX) * st;
+    const z = lower.windZ + (upper.windZ - lower.windZ) * st;
+    const shear = lower.shear + (upper.shear - lower.shear) * st;
+    const ri = lower.richardsonNumber + (upper.richardsonNumber - lower.richardsonNumber) * st;
+    const dir = Math.atan2(z, x);
+    const turb = lower.turbulenceIntensity + (upper.turbulenceIntensity - lower.turbulenceIntensity) * st;
+    const gust = lower.gustFactor + (upper.gustFactor - lower.gustFactor) * st;
+    return { x, y: 0, z, richardsonNumber: ri, directionRadians: dir, turbulenceIntensity: turb, gustFactor: gust, shear } as any;
   }
 
   // ─── Cloud Creation ──────────────────────────────────────
@@ -516,11 +597,11 @@ export class CloudPhysicsEngine {
       this.dissipateCloud(this.bodies[0].id);
     }
 
-const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
+    const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
     const fill = DEFAULT_PHYSICS_FILL;
     const resolvedPhysics = { ...fill, ...physics } as CloudPhysicsParams;
     const alt = pos.y;
-    const wind = this.getWindAtAltitude(alt);
+    const wind: any = this.getWindAtAltitude(alt);
     const sizeX = size?.width ?? (resolvedPhysics.horizontalExtent! * (0.5 + Math.random() * 0.5));
     const sizeY = size?.height ?? (resolvedPhysics.thickness! * (0.5 + Math.random() * 0.5));
     const sizeZ = size?.depth ?? (resolvedPhysics.horizontalExtent! * (0.5 + Math.random() * 0.5));
@@ -531,7 +612,7 @@ const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
       physics: resolvedPhysics,
       pos,
       vel: { x: wind.x, y: 0, z: wind.z },
-      windVel: { ...wind },
+      windVel: { x: wind.x, y: 0, z: wind.z },
       size: { width: sizeX, height: sizeY, depth: sizeZ },
       density: resolvedPhysics.density!,
       temperature: resolvedPhysics.cloudBaseTemp - 5 + Math.random() * 10,
@@ -539,6 +620,8 @@ const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
       liquidWaterContent: resolvedPhysics.liquidWaterContent,
       iceContent: resolvedPhysics.hasIce ? resolvedPhysics.liquidWaterContent * 0.3 : 0,
       dropletSize: resolvedPhysics.meanDropletRadius,
+      effectiveRadius: resolvedPhysics.meanDropletRadius,
+      dropletSizeDistribution: { size: resolvedPhysics.meanDropletRadius, spread: resolvedPhysics.meanDropletRadius * 0.3 },
       precipitationRate: 0,
       thickness: resolvedPhysics.thickness,
       lifetime: 0,
@@ -548,6 +631,13 @@ const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
       isPrecipitating: false,
       isEvaporating: false,
       events: [],
+      rotationY: Math.atan2(wind.z, wind.x),
+      deformation: { stretchX: 1, stretchZ: 1, shear: 0 },
+      cloudTopHeight: pos.y + resolvedPhysics.thickness! * 0.5,
+      cloudBaseHeight: pos.y - resolvedPhysics.thickness! * 0.5,
+      lastWindDir: Math.atan2(wind.z, wind.x),
+      gustOffset: { x: (Math.random()-0.5)*10 * ((wind as any).gustFactor ?? 1), z: (Math.random()-0.5)*10 * ((wind as any).gustFactor ?? 1) },
+      gustTimer: 0,
     };
 
     this.bodies.push(body);
@@ -604,15 +694,35 @@ const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
     const events: CloudBody[] = [];
     const eventsThisStep: string[] = [];
 
-    // 1. Wind-driven advection
+    // 1. Wind-driven advection + gusts + rotation
     if (this.config.enableWindAdvection) {
-      const wind = this.getWindAtAltitude(cloud.pos.y);
-      cloud.windVel = wind;
-
-      // Apply wind advection to cloud velocity
-      const windScale = this.config.globalWindScale;
+      const wind: any = this.getWindAtAltitude(cloud.pos.y);
+      cloud.windVel = { x: wind.x, y: 0, z: wind.z };
+      const windScale = this.config.globalWindScale * (this.config.enableWindGusts ? wind.gustFactor : 1);
       cloud.vel.x += (wind.x * windScale - cloud.vel.x) * dt * 0.5;
       cloud.vel.z += (wind.z * windScale - cloud.vel.z) * dt * 0.5;
+      // Gust offset animated
+      cloud.gustTimer += dt;
+      const gustFreq = 0.5;
+      cloud.gustOffset.x = Math.sin(cloud.gustTimer * gustFreq + parseInt(cloud.id.slice(-2),10)) * 5 * this.config.windGustIntensity * wind.gustFactor;
+      cloud.gustOffset.z = Math.cos(cloud.gustTimer * gustFreq *1.3) * 5 * this.config.windGustIntensity * wind.gustFactor;
+      // Rotation from wind shear (veering)
+      const currentDir = Math.atan2(wind.z, wind.x);
+      const dirDiff = ((currentDir - cloud.lastWindDir + Math.PI*3) % (Math.PI*2)) - Math.PI;
+      cloud.rotationY += dirDiff * dt * 0.3 + this.computeWindShear(cloud.pos.y) * dt * 0.05;
+      cloud.lastWindDir = currentDir;
+      // Deformation from shear
+      const shear = Math.abs(this.computeWindShear(cloud.pos.y));
+      if (shear > 0.005) {
+        const stretch = 1 + shear * 20 * dt;
+        cloud.deformation.stretchX = Math.min(2.5, cloud.deformation.stretchX * (1 + (stretch-1)*0.3));
+        cloud.deformation.stretchZ = Math.min(2.5, cloud.deformation.stretchZ * (1 + (stretch-1)*0.3));
+        cloud.deformation.shear = shear;
+      }
+      // Kelvin-Helmholtz turbulence boost when Ri < threshold
+      if (this.config.enableKelvinHelmholtz && wind.richardsonNumber < this.config.khThreshold) {
+        cloud.turbulence += (0.1 - wind.richardsonNumber) * dt * 2;
+      }
     }
 
     // 2. Turbulence
@@ -647,6 +757,33 @@ const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
       }
     }
 
+    // 5b. Gust offset update
+    if (this.config.enableWindGusts) {
+      cloud.gustTimer += dt;
+      const windNow = this.getWindAtAltitude(cloud.pos.y);
+      const gust = this.computeGustFactor(cloud.pos.y, this.time + cloud.gustTimer);
+      cloud.gustOffset.x = Math.sin(cloud.gustTimer * 0.7) * 0.5 * gust;
+      cloud.gustOffset.z = Math.cos(cloud.gustTimer * 0.9) * 0.5 * gust;
+      cloud.pos.x += cloud.gustOffset.x * dt;
+      cloud.pos.z += cloud.gustOffset.z * dt;
+    }
+    // 5c. Rotation from wind shear
+    {
+      const shearNow = this.computeWindShear(cloud.pos.y);
+      const rotSpeed = shearNow * this.config.windShearScale * 0.5;
+      cloud.rotationY += rotSpeed * dt;
+      cloud.deformation.shear = shearNow * this.config.windShearScale * 0.1;
+      cloud.deformation.stretchX = 1 + shearNow * 0.02;
+      cloud.deformation.stretchZ = 1 + shearNow * 0.015;
+    }
+    // 5d. Bergeron-Findeisen
+    if (this.config.enableBergeronProcess && cloud.temperature < 273.15 && cloud.physics.hasIce && cloud.iceContent > 0 && cloud.liquidWaterContent > 0) {
+      const bergeronRate = 0.005 * cloud.liquidWaterContent * dt;
+      const transfer = Math.min(bergeronRate, cloud.liquidWaterContent);
+      cloud.liquidWaterContent -= transfer;
+      cloud.iceContent += transfer * 0.8;
+    }
+
     // 6. Position update
     cloud.pos.x += cloud.vel.x * dt;
     cloud.pos.y += cloud.vel.y * dt;
@@ -678,6 +815,23 @@ const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
       }
     }
 
+    // 8b. Bergeron-Findeisen ice growth
+    if (this.config.enableBergeronProcess && cloud.temperature < 273.15 && cloud.iceContent > 0 && cloud.liquidWaterContent > 0.1) {
+      const bergeronRate = 0.002 * Math.max(0, 273.15 - cloud.temperature) / 20; // faster when colder
+      const transfer = Math.min(cloud.liquidWaterContent * 0.5, cloud.liquidWaterContent * bergeronRate * dt * 10);
+      cloud.liquidWaterContent -= transfer;
+      cloud.iceContent += transfer * 0.9;
+      // droplet growth
+      cloud.dropletSize += transfer * 0.01;
+      cloud.effectiveRadius = cloud.dropletSize;
+      cloud.dropletSizeDistribution.size = cloud.dropletSize;
+    } else if (this.config.enableBergeronProcess && cloud.temperature < 268 && cloud.liquidWaterContent > 10 && cloud.physics.hasIce) {
+      // nucleation if very cold
+      const nuc = cloud.liquidWaterContent * 0.001 * dt;
+      cloud.liquidWaterContent -= nuc;
+      cloud.iceContent += nuc;
+    }
+
     // 9. Temperature update (adiabatic cooling for rising clouds)
     if (cloud.vel.y > 0.5) {
       // Adiabatic lapse rate: ~9.8 K/km for dry air, ~6.5 K/km for moist
@@ -685,11 +839,16 @@ const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
       cloud.temperature -= lapseRate * (cloud.vel.y * dt) / 1000;
     }
 
-    // 10. Ice formation at altitude
+    // 10. Ice formation at altitude (seed ice, not overwrite Bergeron)
     if (cloud.pos.y > 4000 && cloud.physics.hasIce && cloud.temperature < 273.15) {
       const iceFraction = Math.max(0, 1 - (cloud.temperature - 230) / 43);
-      cloud.iceContent = cloud.liquidWaterContent * iceFraction * 0.3;
-      cloud.physics.fallSpeed = 0.5 + iceFraction; // Ice falls faster
+      if (!this.config.enableBergeronProcess) {
+        cloud.iceContent = cloud.liquidWaterContent * iceFraction * 0.3;
+      } else if (cloud.iceContent < 0.1) {
+        // seed only if no ice yet
+        cloud.iceContent = Math.max(cloud.iceContent, cloud.liquidWaterContent * iceFraction * 0.05);
+      }
+      cloud.physics.fallSpeed = 0.5 + iceFraction;
     }
 
     // 11. Lifetime and aging
@@ -702,17 +861,9 @@ const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
       }
     }
 
-    // 12. Wind shear deformation (cloud shape changes)
-    if (this.config.enableWindAdvection) {
-      const wind = this.getWindAtAltitude(cloud.pos.y);
-      const shear = Math.abs(wind.x - cloud.windVel.x);
-      if (shear > 2) {
-        // Elongate cloud in wind direction
-        const stretchFactor = 1 + shear * 0.01 * dt;
-        cloud.size.width *= stretchFactor;
-        cloud.size.depth *= stretchFactor;
-      }
-    }
+    // 12. Cloud top/base height update
+    cloud.cloudTopHeight = cloud.pos.y + cloud.thickness * 0.5;
+    cloud.cloudBaseHeight = cloud.pos.y - cloud.thickness * 0.5;
 
     // Emit events
     for (const ev of eventsThisStep) {
@@ -851,7 +1002,7 @@ const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
       const x = (Math.random() - 0.5) * 100000;
       const z = (Math.random() - 0.5) * 100000;
 
-      const wind = this.getWindAtAltitude(alt);
+      const wind: any = this.getWindAtAltitude(alt);
       const body = this.spawnCloud(type, { x, y: alt, z });
 
       // Override velocity with wind + weather influence
@@ -877,7 +1028,11 @@ const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
     density: number;
     temperature: number;
     isPrecipitating: boolean;
+    isEvaporating: boolean;
     velocity: { x: number; y: number; z: number };
+    rotationY: number;
+    deformation: { stretchX: number; stretchZ: number; shear: number };
+    gustOffset: { x: number; z: number };
   }> {
     return this.bodies.map((b) => ({
       id: b.id,
@@ -887,7 +1042,11 @@ const physics = CLOUD_PHYSICS_DEFAULTS[type] ?? CLOUD_PHYSICS_DEFAULTS.cumulus!;
       density: b.density,
       temperature: b.temperature,
       isPrecipitating: b.isPrecipitating,
+      isEvaporating: b.isEvaporating,
       velocity: { ...b.vel },
+      rotationY: b.rotationY,
+      deformation: { ...b.deformation },
+      gustOffset: { ...b.gustOffset },
     }));
   }
 

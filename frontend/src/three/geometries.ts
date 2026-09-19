@@ -3,6 +3,7 @@
 // radius for spheres). The geometry is centered at origin so position/rotation
 // from the engine applies cleanly.
 import * as THREE from "three";
+import { disposeExtendedGeometries } from "./extended-geometries.js";
 
 type GeoFn = (sizeM: number) => THREE.BufferGeometry;
 
@@ -642,4 +643,5 @@ export function modelGeometry(modelClass: string, sizeM: number): THREE.BufferGe
 export function disposeModelGeometries(): void {
   for (const g of geoCache.values()) g.dispose();
   geoCache.clear();
+  disposeExtendedGeometries();
 }

@@ -318,3 +318,42 @@ describe("Cannon Integration", () => {
     expect(world.stats.cannonBodies).toBe(1);
   });
 });
+
+// ─── Star Formation (real collapse science) ─────────────────────
+import {
+  jeansMassMsun, freeFallTimeS, starFate, starLifetimeYr,
+  starFormVerdict, collapseVerdict,
+} from "../src/star-formation.js";
+
+describe("Star Formation", () => {
+  it("Taurus cloud 10K 1e4 cm-3 has Jeans mass of a few suns", () => {
+    const mj = jeansMassMsun(10, 1e4);
+    expect(mj).toBeGreaterThan(1);
+    expect(mj).toBeLessThan(30);
+  });
+  it("dense cloud free-fall is ~0.3 Myr", () => {
+    const myr = freeFallTimeS(1e4) / (365.25 * 24 * 3600 * 1e6);
+    expect(myr).toBeGreaterThan(0.15);
+    expect(myr).toBeLessThan(0.6);
+  });
+  it("10 Msun cloud collapses, 0.5 Msun holds", () => {
+    expect(collapseVerdict(10, 10, 1e4)).toMatch(/collapses/);
+    expect(collapseVerdict(0.5, 10, 1e4)).toMatch(/no collapse|stable/);
+  });
+  it("Sun lives ~1e10 yr, massive star dies fast", () => {
+    expect(starLifetimeYr(1)).toBeGreaterThan(5e9);
+    expect(starLifetimeYr(1)).toBeLessThan(2e10);
+    expect(starLifetimeYr(10)).toBeLessThan(5e7);
+  });
+  it("fates follow mass ladder", () => {
+    expect(starFate(0.05).fate).toBe("brown-dwarf");
+    expect(starFate(1).fate).toBe("sun-like-white-dwarf");
+    expect(starFate(15).fate).toBe("neutron-star");
+    expect(starFate(25.1).fate).toBe("black-hole");
+  });
+  it("verdict keeps lab gravity untouched", () => {
+    const v = starFormVerdict(10, 10, 1e4);
+    expect(v.gravityNote).toMatch(/Lab gravity unchanged/);
+    expect(v.freeFallMyr).toBeGreaterThan(0);
+  });
+});

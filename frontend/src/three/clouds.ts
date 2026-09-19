@@ -10,7 +10,7 @@ import type { CloudRenderData } from "./enhanced-clouds.js";
 export interface Clouds {
   group: THREE.Group;
   cloudMeshes: Map<string, THREE.Group>;
-  tick: (dt: number, nightFactor: number, cloudData: CloudRenderData[]) => void;
+  tick: (dt: number, nightFactor: number, cloudData?: CloudRenderData[]) => void;
   updateClouds: (cloudData: CloudRenderData[]) => void;
   dispose: () => void;
 }
@@ -119,21 +119,26 @@ export function buildClouds(scene: THREE.Scene): Clouds {
   return {
     group,
     cloudMeshes,
-    tick: (dt: number, nightFactor: number, cloudData: CloudRenderData[]) => {
+    tick: (dt: number, nightFactor: number, cloudData: CloudRenderData[] = []) => {
       const activeIds = new Set(cloudData.map((c) => c.id));
       cleanupOldClouds(activeIds);
 
       for (const data of cloudData) {
         const mesh = updateCloudMesh(data);
-        // Wind-driven position update
-        mesh.position.x += data.velocity.x * dt;
-        mesh.position.z += data.velocity.z * dt;
+        // Wind-driven position update with gust offset
+        mesh.position.x += data.velocity.x * dt + (data.gustOffset?.x ?? 0) * dt;
+        mesh.position.z += data.velocity.z * dt + (data.gustOffset?.z ?? 0) * dt;
         // Wrap at world boundaries
         const wrap = 50000;
         if (mesh.position.x > wrap) mesh.position.x -= wrap * 2;
         if (mesh.position.x < -wrap) mesh.position.x += wrap * 2;
         if (mesh.position.z > wrap) mesh.position.z -= wrap * 2;
         if (mesh.position.z < -wrap) mesh.position.z += wrap * 2;
+
+        // Apply rotation if available
+        if (data.rotationY) {
+          mesh.rotation.y = (data.rotationY * Math.PI) / 180;
+        }
 
         // Night dimming
         const sprite = mesh.children[0] as THREE.Sprite;
